@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: keycloak-multi-postgres
+    environment:
+      POSTGRES_USER: keycloak_admin
+      POSTGRES_PASSWORD: keycloak_password
+      POSTGRES_DB: keycloak_multi
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: keycloak-multi-backend
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: keycloak_admin
+      DB_PASSWORD: keycloak_password
+      DB_NAME: keycloak_multi
+      DB_SSLMODE: disable
+      SERVER_PORT: 8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Binary is built into the image, no volume mount needed
+    command: ./server
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: keycloak-multi-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8080/api
+      CHOKIDAR_USEPOLLING: "true"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    stdin_open: true
+    tty: true
+    command: sh -c "npm start"
+
+volumes:
+  postgres_data:
+

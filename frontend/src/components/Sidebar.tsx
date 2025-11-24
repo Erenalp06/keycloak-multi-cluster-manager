@@ -174,43 +174,43 @@ export default function Sidebar() {
 
         {/* Clusters - Expandable */}
         <div>
-          <button
-            onClick={() => setClustersExpanded(!clustersExpanded)}
-            className={cn(
-              "relative flex items-center justify-between w-full px-4 py-3 rounded text-base font-medium transition-colors",
-              isClustersPageActive()
-                ? "bg-[rgba(0,102,204,0.1)] text-white"
-                : "text-gray-300 hover:bg-[#222b40] hover:text-white"
-            )}
-          >
-            {isClustersPageActive() && (
-              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
-            )}
-            <div className="flex items-center gap-3">
+          <div className="flex items-center">
+            <Link
+              to="/clusters"
+              className={cn(
+                "relative flex items-center gap-3 flex-1 px-4 py-3 rounded text-base font-medium transition-colors",
+                location.pathname === '/clusters' && !location.pathname.startsWith('/clusters/')
+                  ? "bg-[rgba(0,102,204,0.1)] text-white"
+                  : "text-gray-300 hover:bg-[#222b40] hover:text-white"
+              )}
+            >
+              {location.pathname === '/clusters' && !location.pathname.startsWith('/clusters/') && (
+                <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
+              )}
               <Server className="h-5 w-5" />
               <span>Clusters</span>
-            </div>
-            {clustersExpanded ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
-          </button>
+            </Link>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setClustersExpanded(!clustersExpanded);
+              }}
+              className={cn(
+                "px-2 py-3 text-gray-400 hover:text-white transition-colors",
+                isClustersPageActive() && "text-white"
+              )}
+            >
+              {clustersExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+          </div>
           
           {clustersExpanded && (
             <div className="mt-1 space-y-0.5">
-              <Link
-                to="/clusters"
-                className={cn(
-                  "flex items-center gap-2.5 pl-10 pr-3 py-2 rounded text-sm transition-colors",
-                  location.pathname === '/clusters' && !location.pathname.startsWith('/clusters/')
-                    ? "bg-[rgba(0,102,204,0.1)] text-white"
-                    : "text-gray-500 hover:bg-[#222b40] hover:text-gray-200"
-                )}
-              >
-                <Circle className="h-2 w-2 fill-current" />
-                <span>All Clusters</span>
-              </Link>
               {loading ? (
                 <div className="pl-10 pr-3 py-2 text-sm text-gray-500">Loading...</div>
               ) : clusters.length === 0 ? (
@@ -227,18 +227,18 @@ export default function Sidebar() {
                       const isGroupExpanded = expandedGroups.has(groupName);
                       
                       return (
-                        <div key={groupName} className="mb-1">
+                        <div key={groupName} className="mb-0.5">
                           <button
                             onClick={() => toggleGroup(groupName)}
                             className="flex items-center justify-between w-full pl-10 pr-3 py-2 rounded text-sm text-gray-300 hover:bg-[#222b40] hover:text-white transition-colors group"
                           >
                             <div className="flex items-center gap-2.5">
                               {isGroupExpanded ? (
-                                <ChevronDown className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300" />
+                                <ChevronDown className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300 flex-shrink-0" />
                               ) : (
-                                <ChevronRight className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300" />
+                                <ChevronRight className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300 flex-shrink-0" />
                               )}
-                              <Folder className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300" />
+                              <Folder className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-300 flex-shrink-0" />
                               <span className="font-semibold text-gray-300 group-hover:text-white">{groupName}</span>
                               <span className="text-xs text-gray-500 group-hover:text-gray-400">({groupClusters.length})</span>
                             </div>
@@ -262,7 +262,9 @@ export default function Sidebar() {
                                     {active && (
                                       <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
                                     )}
-                                    {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
+                                    <div className="flex-shrink-0">
+                                      {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
+                                    </div>
                                     <span className="truncate flex-1">{cluster.name}</span>
                                   </Link>
                                 );
@@ -293,7 +295,9 @@ export default function Sidebar() {
                               {active && (
                                 <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
                               )}
-                              {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
+                              <div className="flex-shrink-0">
+                                {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
+                              </div>
                               <span className="truncate flex-1">{cluster.name}</span>
                             </Link>
                           );

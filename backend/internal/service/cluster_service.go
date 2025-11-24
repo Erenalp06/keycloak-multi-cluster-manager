@@ -21,12 +21,13 @@ func NewClusterService(repo *postgres.ClusterRepository) *ClusterService {
 
 func (s *ClusterService) Create(req domain.CreateClusterRequest) (*domain.Cluster, error) {
 	cluster := &domain.Cluster{
-		Name:      req.Name,
-		BaseURL:   req.BaseURL,
-		Realm:     req.Realm,
-		Username:  req.Username,
-		Password:  req.Password,
-		GroupName: req.GroupName,
+		Name:            req.Name,
+		BaseURL:         req.BaseURL,
+		Realm:           req.Realm,
+		Username:        req.Username,
+		Password:        req.Password,
+		GroupName:       req.GroupName,
+		MetricsEndpoint: req.MetricsEndpoint,
 	}
 	
 	if cluster.Realm == "" {
@@ -66,6 +67,7 @@ func (s *ClusterService) Update(id int, req domain.CreateClusterRequest) (*domai
 	cluster.Username = req.Username
 	cluster.Password = req.Password
 	cluster.GroupName = req.GroupName
+	cluster.MetricsEndpoint = req.MetricsEndpoint
 	
 	if err := s.repo.Update(cluster); err != nil {
 		return nil, err
@@ -272,5 +274,171 @@ func (s *ClusterService) GetUserDetails(id int) ([]domain.UserDetail, error) {
 	}
 	
 	return s.keycloakClient.GetUserDetails(cluster.BaseURL, cluster.Realm, token)
+}
+
+func (s *ClusterService) GetServerInfo(id int) (map[string]interface{}, error) {
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+
+	token, err := s.keycloakClient.GetAccessToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.Username,
+		cluster.Password,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.keycloakClient.GetServerInfo(cluster.BaseURL, token)
+}
+
+func (s *ClusterService) GetUserToken(clusterID int, username, password, clientID string) (map[string]interface{}, error) {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+
+	tokenResp, err := s.keycloakClient.GetUserToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		username,
+		password,
+		clientID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user token: %w", err)
+	}
+
+	// Decode the token
+	decoded, err := s.keycloakClient.DecodeToken(tokenResp.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"access_token": tokenResp.AccessToken,
+		"token_type":   tokenResp.TokenType,
+		"expires_in":   tokenResp.ExpiresIn,
+		"decoded":      decoded,
+	}
+
+	return result, nil
+}
+
+func (s *ClusterService) GetRBACAnalysis(id int, roleName string) (*domain.RBACAnalysis, error) {
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.keycloakClient.GetAccessToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.Username,
+		cluster.Password,
+	)
+	if err != nil {
+		return nil, err
+	}
+	
+	analysis, err := s.keycloakClient.GetRBACAnalysis(cluster.BaseURL, cluster.Realm, token, roleName)
+	if err != nil {
+		return nil, err
+	}
+	
+	return analysis, nil
+}
+
+func (s *ClusterService) GetUserRBACAnalysis(id int, username string) (*domain.RBACAnalysis, error) {
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.keycloakClient.GetAccessToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.Username,
+		cluster.Password,
+	)
+	if err != nil {
+		return nil, err
+	}
+	
+	analysis, err := s.keycloakClient.GetUserRBACAnalysis(cluster.BaseURL, cluster.Realm, token, username)
+	if err != nil {
+		return nil, err
+	}
+	
+	return analysis, nil
+}
+
+func (s *ClusterService) GetClientRBACAnalysis(id int, clientID string) (*domain.RBACAnalysis, error) {
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.keycloakClient.GetAccessToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.Username,
+		cluster.Password,
+	)
+	if err != nil {
+		return nil, err
+	}
+	
+	analysis, err := s.keycloakClient.GetClientRBACAnalysis(cluster.BaseURL, cluster.Realm, token, clientID)
+	if err != nil {
+		return nil, err
+	}
+	
+	return analysis, nil
+}
+
+func (s *ClusterService) GetPrometheusMetrics(id int) (*domain.PrometheusMetrics, error) {
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	// If no metrics endpoint is configured, return unavailable
+	if cluster.MetricsEndpoint == nil || *cluster.MetricsEndpoint == "" {
+		return &domain.PrometheusMetrics{
+			ClusterID: id,
+			Available: false,
+			Error:     "Metrics endpoint not configured",
+		}, nil
+	}
+	
+	metrics, err := s.keycloakClient.GetPrometheusMetrics(*cluster.MetricsEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	
+	metrics.ClusterID = id
+	return metrics, nil
 }
 

@@ -222,3 +222,98 @@ func (h *ClusterHandler) GetUserDetails(c *fiber.Ctx) error {
 	return c.JSON(users)
 }
 
+func (h *ClusterHandler) GetServerInfo(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	serverInfo, err := h.service.GetServerInfo(id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(serverInfo)
+}
+
+func (h *ClusterHandler) GetUserToken(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		ClientID string `json:"client_id"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.Username == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Username and password are required"})
+	}
+	
+	result, err := h.service.GetUserToken(id, req.Username, req.Password, req.ClientID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(result)
+}
+
+func (h *ClusterHandler) GetRBACAnalysis(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	entityType := c.Query("type") // user, role, client
+	entityName := c.Query("name") // username, roleName, clientID
+	
+	if entityType == "" {
+		// Backward compatibility: if type is not specified, assume role
+		entityType = "role"
+		entityName = c.Query("role")
+	}
+	
+	if entityName == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Entity name is required"})
+	}
+	
+	var analysis *domain.RBACAnalysis
+	
+	switch entityType {
+	case "user":
+		analysis, err = h.service.GetUserRBACAnalysis(id, entityName)
+	case "role":
+		analysis, err = h.service.GetRBACAnalysis(id, entityName)
+	case "client":
+		analysis, err = h.service.GetClientRBACAnalysis(id, entityName)
+	default:
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid entity type. Must be 'user', 'role', or 'client'"})
+	}
+	
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(analysis)
+}
+
+func (h *ClusterHandler) GetPrometheusMetrics(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	metrics, err := h.service.GetPrometheusMetrics(id)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(metrics)
+}
+

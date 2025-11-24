@@ -1,16 +1,25 @@
 import { useState, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, GitCompare, Server, Settings, Shield, ChevronDown, ChevronRight, Circle, Folder } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, GitCompare, Server, Settings, Shield, ChevronDown, ChevronRight, Circle, Folder, LogOut, User, Users, UserCog, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { clusterApi, Cluster, ClusterHealth } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from './ui/button';
 
 export default function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clustersExpanded, setClustersExpanded] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [healthStatuses, setHealthStatuses] = useState<Record<number, ClusterHealth>>({});
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   useEffect(() => {
     loadClusters();
@@ -315,6 +324,63 @@ export default function Sidebar() {
           Role Diff
         </Link>
 
+        {/* Permission Analyzer */}
+        {clusters.length > 0 && (
+          <Link
+            to={`/clusters/${clusters[0].id}/permission-analyzer`}
+            className={cn(
+              "relative flex items-center gap-3 px-4 py-3 rounded text-base font-medium transition-colors",
+              location.pathname.includes('/permission-analyzer')
+                ? "bg-[rgba(0,102,204,0.1)] text-white"
+                : "text-gray-300 hover:bg-[#222b40] hover:text-white"
+            )}
+          >
+            {location.pathname.includes('/permission-analyzer') && (
+              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
+            )}
+            <Search className="h-5 w-5" />
+            Permission Analyzer
+          </Link>
+        )}
+
+        {/* Users (Admin only) */}
+        {user?.role === 'admin' && (
+          <Link
+            to="/users"
+            className={cn(
+              "relative flex items-center gap-3 px-4 py-3 rounded text-base font-medium transition-colors",
+              location.pathname === '/users'
+                ? "bg-[rgba(0,102,204,0.1)] text-white"
+                : "text-gray-300 hover:bg-[#222b40] hover:text-white"
+            )}
+          >
+            {location.pathname === '/users' && (
+              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
+            )}
+            <Users className="h-5 w-5" />
+            Users
+          </Link>
+        )}
+
+        {/* Roles (Admin only) */}
+        {user?.role === 'admin' && (
+          <Link
+            to="/roles"
+            className={cn(
+              "relative flex items-center gap-3 px-4 py-3 rounded text-base font-medium transition-colors",
+              location.pathname === '/roles'
+                ? "bg-[rgba(0,102,204,0.1)] text-white"
+                : "text-gray-300 hover:bg-[#222b40] hover:text-white"
+            )}
+          >
+            {location.pathname === '/roles' && (
+              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
+            )}
+            <UserCog className="h-5 w-5" />
+            Roles
+          </Link>
+        )}
+
         {/* Settings */}
         <Link
           to="/settings"
@@ -334,7 +400,27 @@ export default function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="p-4 border-t border-[#2a3441]">
+      <div className="p-4 border-t border-[#2a3441] space-y-3">
+        {user && (
+          <div className="flex items-center gap-2 px-2 py-2 rounded text-sm text-gray-300">
+            <User className="h-4 w-4" />
+            <div className="flex flex-col truncate">
+              <span className="truncate">{user.username}</span>
+              {user.role === 'admin' && (
+                <span className="text-xs text-[#0066cc]">Admin</span>
+              )}
+            </div>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleLogout}
+          className="w-full justify-start text-gray-300 hover:text-white hover:bg-[#222b40]"
+        >
+          <LogOut className="h-4 w-4 mr-2" />
+          Logout
+        </Button>
         <p className="text-xs text-gray-500 text-center">v1.0.0 MVP</p>
       </div>
     </div>

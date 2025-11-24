@@ -34,30 +34,31 @@ services:
       DB_NAME: keycloak_multi
       DB_SSLMODE: disable
       SERVER_PORT: 8080
+      JWT_SECRET: your-secret-key-change-in-production-min-32-chars
     depends_on:
       postgres:
         condition: service_healthy
     # Binary is built into the image, no volume mount needed
     command: ./server
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: keycloak-multi-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      REACT_APP_API_URL: http://localhost:8080/api
-      CHOKIDAR_USEPOLLING: "true"
-    depends_on:
-      - backend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    stdin_open: true
-    tty: true
-    command: sh -c "npm start"
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: keycloak-multi-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     REACT_APP_API_URL: http://localhost:8080/api
+  #     CHOKIDAR_USEPOLLING: "true"
+  #   depends_on:
+  #     - backend
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   stdin_open: true
+  #   tty: true
+  #   command: sh -c "npm start"
 
 volumes:
   postgres_data:

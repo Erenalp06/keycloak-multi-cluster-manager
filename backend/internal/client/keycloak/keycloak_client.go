@@ -2,10 +2,13 @@ package keycloak
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 	"keycloak-multi-manage/internal/domain"
 )
@@ -700,5 +703,1271 @@ func getStringSlice(m map[string]interface{}, key string) []string {
 		}
 	}
 	return []string{}
+}
+
+// ExportRealm exports the realm configuration as JSON
+func (c *Client) ExportRealm(baseURL, realm, accessToken string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s", baseURL, realm)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to export realm: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var realmConfig map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&realmConfig); err != nil {
+		return nil, err
+	}
+	
+	return realmConfig, nil
+}
+
+// ImportRealm imports a realm configuration
+func (c *Client) ImportRealm(baseURL, accessToken string, realmConfig map[string]interface{}) error {
+	url := fmt.Sprintf("%s/admin/realms", baseURL)
+	
+	jsonData, err := json.Marshal(realmConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal realm config: %w", err)
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to import realm: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// ExportUsers exports all users as JSON array
+func (c *Client) ExportUsers(baseURL, realm, accessToken string) ([]map[string]interface{}, error) {
+	return c.GetUsers(baseURL, realm, accessToken, 0)
+}
+
+// ImportUsers imports users from JSON array
+func (c *Client) ImportUsers(baseURL, realm, accessToken string, users []map[string]interface{}) error {
+	for _, user := range users {
+		username := getString(user, "username")
+		
+		// Remove ID to allow Keycloak to generate new one or use existing
+		delete(user, "id")
+		delete(user, "createdTimestamp")
+		
+		jsonData, err := json.Marshal(user)
+		if err != nil {
+			return fmt.Errorf("failed to marshal user: %w", err)
+		}
+		
+		url := fmt.Sprintf("%s/admin/realms/%s/users", baseURL, realm)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return err
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		
+		// If user already exists (409), try to update it
+		if resp.StatusCode == http.StatusConflict {
+			// Find existing user by username
+			existingUsers, err := c.GetUsers(baseURL, realm, accessToken, 0)
+			if err != nil {
+				return fmt.Errorf("failed to get existing users: %w", err)
+			}
+			
+			var existingUserID string
+			for _, eu := range existingUsers {
+				if getString(eu, "username") == username {
+					existingUserID = getString(eu, "id")
+					break
+				}
+			}
+			
+			if existingUserID == "" {
+				return fmt.Errorf("user %v already exists but could not find its ID", username)
+			}
+			
+			// Update existing user
+			updateURL := fmt.Sprintf("%s/admin/realms/%s/users/%s", baseURL, realm, existingUserID)
+			updateReq, err := http.NewRequest("PUT", updateURL, bytes.NewBuffer(jsonData))
+			if err != nil {
+				return err
+			}
+			
+			updateReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+			updateReq.Header.Set("Content-Type", "application/json")
+			
+			updateResp, err := c.httpClient.Do(updateReq)
+			if err != nil {
+				return err
+			}
+			defer updateResp.Body.Close()
+			
+			if updateResp.StatusCode != http.StatusNoContent {
+				body, _ := io.ReadAll(updateResp.Body)
+				return fmt.Errorf("failed to update existing user %v: status %d, body: %s", username, updateResp.StatusCode, string(body))
+			}
+		} else if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("failed to import user %v: status %d, body: %s", username, resp.StatusCode, string(body))
+		}
+	}
+	
+	return nil
+}
+
+// GetServerInfo gets Keycloak server information including version
+func (c *Client) GetServerInfo(baseURL, accessToken string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/serverinfo", baseURL)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get server info: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var serverInfo map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&serverInfo); err != nil {
+		return nil, err
+	}
+	
+	return serverInfo, nil
+}
+
+// ExportClients exports all clients as JSON array
+func (c *Client) ExportClients(baseURL, realm, accessToken string) ([]map[string]interface{}, error) {
+	return c.getClients(baseURL, realm, accessToken)
+}
+
+// ImportClients imports clients from JSON array
+func (c *Client) ImportClients(baseURL, realm, accessToken string, clients []map[string]interface{}) error {
+	for _, client := range clients {
+		clientIdStr := getString(client, "clientId")
+		
+		// Remove ID to allow Keycloak to generate new one or use existing
+		delete(client, "id")
+		
+		jsonData, err := json.Marshal(client)
+		if err != nil {
+			return fmt.Errorf("failed to marshal client: %w", err)
+		}
+		
+		url := fmt.Sprintf("%s/admin/realms/%s/clients", baseURL, realm)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return err
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		
+		// If client already exists (409), try to update it
+		if resp.StatusCode == http.StatusConflict {
+			// Find existing client by clientId
+			existingClients, err := c.getClients(baseURL, realm, accessToken)
+			if err != nil {
+				return fmt.Errorf("failed to get existing clients: %w", err)
+			}
+			
+			var existingClientID string
+			for _, ec := range existingClients {
+				if getString(ec, "clientId") == clientIdStr {
+					existingClientID = getString(ec, "id")
+					break
+				}
+			}
+			
+			if existingClientID == "" {
+				return fmt.Errorf("client %v already exists but could not find its ID", clientIdStr)
+			}
+			
+			// Update existing client
+			updateURL := fmt.Sprintf("%s/admin/realms/%s/clients/%s", baseURL, realm, existingClientID)
+			updateReq, err := http.NewRequest("PUT", updateURL, bytes.NewBuffer(jsonData))
+			if err != nil {
+				return err
+			}
+			
+			updateReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+			updateReq.Header.Set("Content-Type", "application/json")
+			
+			updateResp, err := c.httpClient.Do(updateReq)
+			if err != nil {
+				return err
+			}
+			defer updateResp.Body.Close()
+			
+			if updateResp.StatusCode != http.StatusNoContent {
+				body, _ := io.ReadAll(updateResp.Body)
+				return fmt.Errorf("failed to update existing client %v: status %d, body: %s", clientIdStr, updateResp.StatusCode, string(body))
+			}
+		} else if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("failed to import client %v: status %d, body: %s", clientIdStr, resp.StatusCode, string(body))
+		}
+	}
+	
+	return nil
+}
+
+// GetUserToken gets access token for a specific user using password grant
+func (c *Client) GetUserToken(baseURL, realm, username, password, clientID string) (*TokenResponse, error) {
+	if clientID == "" {
+		clientID = "admin-cli"
+	}
+	
+	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", baseURL, realm)
+	
+	data := fmt.Sprintf("grant_type=password&client_id=%s&username=%s&password=%s",
+		clientID, username, password)
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBufferString(data))
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get user token: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, err
+	}
+	
+	return &tokenResp, nil
+}
+
+// DecodeToken decodes a JWT token and returns header, payload, and claims
+func (c *Client) DecodeToken(token string) (map[string]interface{}, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+	
+	result := make(map[string]interface{})
+	
+	// Decode header
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode header: %w", err)
+	}
+	var header map[string]interface{}
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, fmt.Errorf("failed to parse header: %w", err)
+	}
+	result["header"] = header
+	
+	// Decode payload
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode payload: %w", err)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse payload: %w", err)
+	}
+	result["payload"] = payload
+	
+	// Extract claims
+	claims := make(map[string]interface{})
+	if exp, ok := payload["exp"]; ok {
+		claims["expiration"] = exp
+	}
+	if iat, ok := payload["iat"]; ok {
+		claims["issued_at"] = iat
+	}
+	if sub, ok := payload["sub"]; ok {
+		claims["subject"] = sub
+	}
+	if email, ok := payload["email"]; ok {
+		claims["email"] = email
+	}
+	if preferredUsername, ok := payload["preferred_username"]; ok {
+		claims["username"] = preferredUsername
+	}
+	if realmAccess, ok := payload["realm_access"]; ok {
+		if realmAccessMap, ok := realmAccess.(map[string]interface{}); ok {
+			if roles, ok := realmAccessMap["roles"]; ok {
+				claims["realm_roles"] = roles
+			}
+		}
+	}
+	if resourceAccess, ok := payload["resource_access"]; ok {
+		if resourceAccessMap, ok := resourceAccess.(map[string]interface{}); ok {
+			clientRoles := make(map[string]interface{})
+			for clientID, access := range resourceAccessMap {
+				if accessMap, ok := access.(map[string]interface{}); ok {
+					if roles, ok := accessMap["roles"]; ok {
+						clientRoles[clientID] = roles
+					}
+				}
+			}
+			if len(clientRoles) > 0 {
+				claims["client_roles"] = clientRoles
+			}
+		}
+	}
+	result["claims"] = claims
+	
+	return result, nil
+}
+
+// GetPrometheusMetrics fetches Prometheus metrics from Keycloak metrics endpoint
+func (c *Client) GetPrometheusMetrics(metricsEndpoint string) (*domain.PrometheusMetrics, error) {
+	// Use the provided metrics endpoint URL
+	metricsURL := metricsEndpoint
+	
+	req, err := http.NewRequest("GET", metricsURL, nil)
+	if err != nil {
+		return &domain.PrometheusMetrics{
+			Available: false,
+			Error:     fmt.Sprintf("Failed to create request: %v", err),
+		}, nil
+	}
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &domain.PrometheusMetrics{
+			Available: false,
+			Error:     fmt.Sprintf("Failed to fetch metrics: %v", err),
+		}, nil
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return &domain.PrometheusMetrics{
+			Available: false,
+			Error:     fmt.Sprintf("Metrics endpoint returned status %d", resp.StatusCode),
+		}, nil
+	}
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &domain.PrometheusMetrics{
+			Available: false,
+			Error:     fmt.Sprintf("Failed to read response: %v", err),
+		}, nil
+	}
+	
+	metrics := c.parsePrometheusMetrics(string(body))
+	metrics.Available = true
+	return metrics, nil
+}
+
+
+// parsePrometheusMetrics parses Prometheus format metrics text
+func (c *Client) parsePrometheusMetrics(text string) *domain.PrometheusMetrics {
+	metrics := &domain.PrometheusMetrics{
+		Available:         false,
+		InfinispanMetrics: make(map[string]float64),
+	}
+	
+	var heapUsed, heapMax float64
+	
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		// Parse metric lines: metric_name{labels} value
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		
+		metricName := strings.Split(parts[0], "{")[0]
+		valueStr := parts[len(parts)-1]
+		value, err := strconv.ParseFloat(valueStr, 64)
+		if err != nil {
+			continue
+		}
+		
+		// Health Row Metrics
+		switch {
+		case strings.Contains(metricName, "process_uptime_seconds"):
+			metrics.Uptime = value
+		case strings.Contains(metricName, "keycloak_sessions_active"):
+			metrics.ActiveSessions = value
+		case strings.Contains(metricName, "jvm_memory_heap_used_bytes"):
+			heapUsed = value / (1024 * 1024) // Convert to MB
+		case strings.Contains(metricName, "jvm_memory_heap_max_bytes"):
+			heapMax = value / (1024 * 1024) // Convert to MB
+		case strings.Contains(metricName, "hikari_connections_active") || strings.Contains(metricName, "db_pool_active"):
+			// DB Pool Usage - need to get max connections too
+			if strings.Contains(metricName, "active") {
+				// Try to find max connections in the same line or nearby
+				metrics.DbPoolUsage = value // Will be calculated if we find max
+			}
+		case strings.Contains(metricName, "hikari_connections_max") || strings.Contains(metricName, "db_pool_max"):
+			if metrics.DbPoolUsage > 0 {
+				metrics.DbPoolUsage = (metrics.DbPoolUsage / value) * 100
+			}
+		
+		// Traffic Row Metrics
+		case strings.Contains(metricName, "keycloak_logins") && strings.Contains(metricName, "total"):
+			if strings.Contains(line, "result=\"success\"") {
+				metrics.Logins1Min = value
+			} else if strings.Contains(line, "result=\"error\"") || strings.Contains(line, "result=\"failure\"") {
+				metrics.FailedLogins1Min = value
+			}
+		case strings.Contains(metricName, "keycloak_token_exchanges_total") || strings.Contains(metricName, "keycloak_token_requests_total"):
+			if strings.Contains(line, "result=\"success\"") {
+				metrics.TokenRequests = value
+			} else if strings.Contains(line, "result=\"error\"") {
+				metrics.TokenErrors = value
+			}
+		
+		// Performance Row Metrics
+		case strings.Contains(metricName, "http_server_requests_seconds_sum"):
+			metrics.AvgRequestDuration = value
+		case strings.Contains(metricName, "http_server_requests_seconds_count"):
+			if metrics.AvgRequestDuration > 0 && value > 0 {
+				metrics.AvgRequestDuration = metrics.AvgRequestDuration / value
+			}
+			metrics.HttpRequestCount = value
+		case strings.Contains(metricName, "keycloak_token_endpoint_latency") || (strings.Contains(metricName, "http_server_requests_seconds") && strings.Contains(line, "uri=\"/realms") && strings.Contains(line, "token\"")):
+			metrics.TokenEndpointLatency = value
+		case strings.Contains(metricName, "jvm_gc_pause_seconds_sum") || strings.Contains(metricName, "jvm_gc_pause_seconds_total"):
+			metrics.GcPauses5Min = value
+		
+		// Cache Row Metrics
+		case strings.Contains(metricName, "cache_hits_total") || strings.Contains(metricName, "cache_hits"):
+			if metrics.InfinispanMetrics == nil {
+				metrics.InfinispanMetrics = make(map[string]float64)
+			}
+			metrics.InfinispanMetrics["hits"] = value
+		case strings.Contains(metricName, "cache_misses_total") || strings.Contains(metricName, "cache_misses"):
+			metrics.CacheMisses = value
+			if metrics.InfinispanMetrics == nil {
+				metrics.InfinispanMetrics = make(map[string]float64)
+			}
+			metrics.InfinispanMetrics["misses"] = value
+		case strings.Contains(metricName, "infinispan"):
+			// Store all infinispan metrics
+			if metrics.InfinispanMetrics == nil {
+				metrics.InfinispanMetrics = make(map[string]float64)
+			}
+			key := strings.ReplaceAll(metricName, "infinispan_", "")
+			metrics.InfinispanMetrics[key] = value
+		}
+	}
+	
+	// Calculate JVM Heap Percentage
+	if heapMax > 0 && heapUsed > 0 {
+		metrics.JvmHeapPercent = (heapUsed / heapMax) * 100
+	}
+	
+	// Calculate Cache Hit Rate
+	if metrics.InfinispanMetrics != nil {
+		hits := metrics.InfinispanMetrics["hits"]
+		misses := metrics.CacheMisses
+		if hits > 0 || misses > 0 {
+			total := hits + misses
+			if total > 0 {
+				metrics.CacheHitRate = (hits / total) * 100
+			}
+		}
+	}
+	
+	return metrics
+}
+
+// GetRBACAnalysis analyzes RBAC structure for a specific role
+func (c *Client) GetRBACAnalysis(baseURL, realm, accessToken, roleName string) (*domain.RBACAnalysis, error) {
+	// Get role details
+	role, err := c.getRoleDetails(baseURL, realm, accessToken, roleName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get role details: %w", err)
+	}
+
+	// Build RBAC tree recursively
+	rbacNode := c.buildRBACTree(baseURL, realm, accessToken, role, 0)
+
+	// Calculate statistics
+	stats := c.calculateRBACStats(rbacNode)
+
+	return &domain.RBACAnalysis{
+		Role:       rbacNode,
+		Statistics: stats,
+	}, nil
+}
+
+// GetUserRBACAnalysis analyzes RBAC structure for a specific user
+func (c *Client) GetUserRBACAnalysis(baseURL, realm, accessToken, username string) (*domain.RBACAnalysis, error) {
+	// Get user by username
+	user, err := c.getUserByUsername(baseURL, realm, accessToken, username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	userID := getString(user, "id")
+	
+	// Build user node
+	userNode := domain.RBACNode{
+		ID:          fmt.Sprintf("user-%s", username),
+		Name:        username,
+		Type:        "user",
+		Description: fmt.Sprintf("User: %s", username),
+		Children:    []domain.RBACNode{},
+	}
+
+	// Get realm roles for user
+	realmRoles, err := c.getUserRealmRoles(baseURL, realm, accessToken, userID)
+	if err == nil {
+		for _, roleName := range realmRoles {
+			role, err := c.getRoleDetails(baseURL, realm, accessToken, roleName)
+			if err == nil {
+				roleNode := c.buildRBACTree(baseURL, realm, accessToken, role, 0)
+				userNode.Children = append(userNode.Children, roleNode)
+			}
+		}
+	}
+
+	// Get client roles for user
+	clientRoles, err := c.getUserClientRoles(baseURL, realm, accessToken, userID)
+	if err == nil {
+		for clientID, roleNames := range clientRoles {
+			// Get client details
+			client, err := c.getClientByID(baseURL, realm, accessToken, clientID)
+			if err == nil {
+				clientNode := domain.RBACNode{
+					ID:          fmt.Sprintf("client-%s", getString(client, "clientId")),
+					Name:        getString(client, "clientId"),
+					Type:        "client",
+					Description: fmt.Sprintf("Client: %s", getString(client, "clientId")),
+					Children:    []domain.RBACNode{},
+				}
+
+				// Get client roles
+				for _, roleName := range roleNames {
+					clientRole, err := c.getClientRoleDetails(baseURL, realm, accessToken, clientID, roleName)
+					if err == nil {
+						clientRoleNode := c.buildClientRoleNode(baseURL, realm, accessToken, clientRole, 0)
+						clientNode.Children = append(clientNode.Children, clientRoleNode)
+					}
+				}
+
+				userNode.Children = append(userNode.Children, clientNode)
+			}
+		}
+	}
+
+	// Calculate statistics
+	stats := c.calculateRBACStats(userNode)
+
+	return &domain.RBACAnalysis{
+		Role:       userNode,
+		Statistics: stats,
+	}, nil
+}
+
+// GetClientRBACAnalysis analyzes RBAC structure for a specific client
+func (c *Client) GetClientRBACAnalysis(baseURL, realm, accessToken, clientID string) (*domain.RBACAnalysis, error) {
+	// Get client by ID
+	client, err := c.getClientByID(baseURL, realm, accessToken, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get client: %w", err)
+	}
+
+	clientNode := domain.RBACNode{
+		ID:          fmt.Sprintf("client-%s", getString(client, "clientId")),
+		Name:        getString(client, "clientId"),
+		Type:        "client",
+		Description: fmt.Sprintf("Client: %s", getString(client, "clientId")),
+		Children:    []domain.RBACNode{},
+	}
+
+	// Get client roles
+	clientRoles, err := c.getClientRoles(baseURL, realm, accessToken, clientID)
+	if err == nil {
+		for _, clientRole := range clientRoles {
+			clientRoleNode := c.buildClientRoleNode(baseURL, realm, accessToken, clientRole, 0)
+			clientNode.Children = append(clientNode.Children, clientRoleNode)
+		}
+	}
+
+	// Get all scopes for this client
+	scopes, err := c.getScopesForClientRole(baseURL, realm, accessToken, clientID, "")
+	if err == nil {
+		for _, scope := range scopes {
+			scopeNode := domain.RBACNode{
+				ID:          fmt.Sprintf("scope-%s", getString(scope, "name")),
+				Name:        getString(scope, "name"),
+				Type:        "scope",
+				Description: fmt.Sprintf("Scope: %s", getString(scope, "name")),
+				Children:    []domain.RBACNode{},
+			}
+
+			// Get permissions for this scope
+			permissions, err := c.getAllPermissionsForClient(baseURL, realm, accessToken, clientID)
+			if err == nil {
+				for _, permission := range permissions {
+					if c.permissionHasScope(permission, getString(scope, "name")) {
+						permissionNode := c.buildPermissionNode(baseURL, realm, accessToken, clientID, permission, 0)
+						scopeNode.Children = append(scopeNode.Children, permissionNode)
+					}
+				}
+			}
+
+			if len(scopeNode.Children) > 0 {
+				clientNode.Children = append(clientNode.Children, scopeNode)
+			}
+		}
+	}
+
+	// Calculate statistics
+	stats := c.calculateRBACStats(clientNode)
+
+	return &domain.RBACAnalysis{
+		Role:       clientNode,
+		Statistics: stats,
+	}, nil
+}
+
+// getRoleDetails gets detailed information about a role
+func (c *Client) getRoleDetails(baseURL, realm, accessToken, roleName string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/roles/%s", baseURL, realm, roleName)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get role details: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var role map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&role); err != nil {
+		return nil, err
+	}
+	
+	return role, nil
+}
+
+// buildRBACTree recursively builds the RBAC tree structure
+func (c *Client) buildRBACTree(baseURL, realm, accessToken string, role map[string]interface{}, depth int) domain.RBACNode {
+	if depth > 10 { // Prevent infinite recursion
+		return domain.RBACNode{}
+	}
+
+	roleName := getString(role, "name")
+	roleID := fmt.Sprintf("role-%s", roleName)
+	
+	node := domain.RBACNode{
+		ID:          roleID,
+		Name:        roleName,
+		Type:        "role",
+		Description: getString(role, "description"),
+		Children:    []domain.RBACNode{},
+	}
+
+	// Get composite roles
+	if getBool(role, "composite") {
+		composites, err := c.getCompositeRoles(baseURL, realm, accessToken, roleName)
+		if err == nil {
+			for _, composite := range composites {
+				compositeNode := domain.RBACNode{
+					ID:          fmt.Sprintf("composite-%s", getString(composite, "name")),
+					Name:        getString(composite, "name"),
+					Type:        "composite",
+					Description: fmt.Sprintf("Composite: %s", getString(composite, "name")),
+					Children:    []domain.RBACNode{},
+				}
+				
+				// Recursively get client roles for composite
+				clientRoles, err := c.getClientRolesForRole(baseURL, realm, accessToken, getString(composite, "name"))
+				if err == nil {
+					for _, clientRole := range clientRoles {
+						clientRoleNode := c.buildClientRoleNode(baseURL, realm, accessToken, clientRole, depth+1)
+						compositeNode.Children = append(compositeNode.Children, clientRoleNode)
+					}
+				}
+				
+				node.Children = append(node.Children, compositeNode)
+			}
+		}
+	}
+
+	// Get client roles directly assigned to this role
+	clientRoles, err := c.getClientRolesForRole(baseURL, realm, accessToken, roleName)
+	if err == nil {
+		for _, clientRole := range clientRoles {
+			clientRoleNode := c.buildClientRoleNode(baseURL, realm, accessToken, clientRole, depth+1)
+			node.Children = append(node.Children, clientRoleNode)
+		}
+	}
+
+	return node
+}
+
+// buildClientRoleNode builds a client role node with scopes, permissions, and policies
+func (c *Client) buildClientRoleNode(baseURL, realm, accessToken string, clientRole map[string]interface{}, depth int) domain.RBACNode {
+	clientRoleName := getString(clientRole, "name")
+	clientID := getString(clientRole, "containerId")
+	
+	clientRoleNode := domain.RBACNode{
+		ID:          fmt.Sprintf("client-role-%s", clientRoleName),
+		Name:        clientRoleName,
+		Type:        "client-role",
+		Description: fmt.Sprintf("Client Role: %s", clientRoleName),
+		Children:    []domain.RBACNode{},
+	}
+
+	// Get all scopes for this client
+	scopes, err := c.getScopesForClientRole(baseURL, realm, accessToken, clientID, clientRoleName)
+	if err == nil {
+		for _, scope := range scopes {
+			scopeName := getString(scope, "name")
+			scopeNode := domain.RBACNode{
+				ID:          fmt.Sprintf("scope-%s", scopeName),
+				Name:        scopeName,
+				Type:        "scope",
+				Description: fmt.Sprintf("Scope: %s", scopeName),
+				Children:    []domain.RBACNode{},
+			}
+			
+			// Get all permissions for this client and filter by scope
+			permissions, err := c.getAllPermissionsForClient(baseURL, realm, accessToken, clientID)
+			if err == nil {
+				for _, permission := range permissions {
+					// Check if permission includes this scope
+					if c.permissionHasScope(permission, scopeName) {
+						permissionNode := c.buildPermissionNode(baseURL, realm, accessToken, clientID, permission, depth+1)
+						scopeNode.Children = append(scopeNode.Children, permissionNode)
+					}
+				}
+			}
+			
+			// Only add scope node if it has permissions
+			if len(scopeNode.Children) > 0 {
+				clientRoleNode.Children = append(clientRoleNode.Children, scopeNode)
+			}
+		}
+	}
+	
+	// Also get permissions without scopes (resource permissions)
+	permissions, err := c.getAllPermissionsForClient(baseURL, realm, accessToken, clientID)
+	if err == nil {
+		for _, permission := range permissions {
+			// Check if permission has no scopes (resource permission)
+			if !c.permissionHasAnyScope(permission) {
+				permissionNode := c.buildPermissionNode(baseURL, realm, accessToken, clientID, permission, depth+1)
+				// Add directly to client role if it has policies
+				if len(permissionNode.Children) > 0 {
+					clientRoleNode.Children = append(clientRoleNode.Children, permissionNode)
+				}
+			}
+		}
+	}
+
+	return clientRoleNode
+}
+
+// buildPermissionNode builds a permission node with policies
+func (c *Client) buildPermissionNode(baseURL, realm, accessToken, clientID string, permission map[string]interface{}, depth int) domain.RBACNode {
+	permissionName := getString(permission, "name")
+	
+	permissionNode := domain.RBACNode{
+		ID:          fmt.Sprintf("permission-%s", permissionName),
+		Name:        permissionName,
+		Type:        "permission",
+		Description: fmt.Sprintf("Permission: %s", permissionName),
+		Children:    []domain.RBACNode{},
+	}
+
+	// Get policies from permission's policies field
+	if policies, ok := permission["policies"].([]interface{}); ok {
+		for _, policyInterface := range policies {
+			if policyID, ok := policyInterface.(string); ok {
+				// Get policy details by ID
+				policy, err := c.getPolicyByID(baseURL, realm, accessToken, clientID, policyID)
+				if err == nil && policy != nil {
+					policyType := getString(policy, "type")
+					policyNode := domain.RBACNode{
+						ID:          fmt.Sprintf("policy-%s", getString(policy, "name")),
+						Name:        getString(policy, "name"),
+						Type:        "policy",
+						Description: fmt.Sprintf("Policy: %s", getString(policy, "name")),
+						PolicyType:  policyType,
+						Children:    []domain.RBACNode{},
+					}
+					permissionNode.Children = append(permissionNode.Children, policyNode)
+				}
+			}
+		}
+	}
+
+	return permissionNode
+}
+
+// Helper functions to fetch RBAC components
+func (c *Client) getCompositeRoles(baseURL, realm, accessToken, roleName string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/roles/%s/composites", baseURL, realm, roleName)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var composites []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&composites)
+	return composites, nil
+}
+
+func (c *Client) getClientRolesForRole(baseURL, realm, accessToken, roleName string) ([]map[string]interface{}, error) {
+	// Get all clients first
+	clients, err := c.getClients(baseURL, realm, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	
+	var clientRoles []map[string]interface{}
+	for _, client := range clients {
+		clientID := getString(client, "id")
+		if clientID == "" {
+			continue
+		}
+		
+		// Get client roles
+		roles, err := c.getClientRoles(baseURL, realm, accessToken, clientID)
+		if err == nil {
+			clientRoles = append(clientRoles, roles...)
+		}
+	}
+	
+	return clientRoles, nil
+}
+
+func (c *Client) getClientRoles(baseURL, realm, accessToken, clientID string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var roles []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&roles)
+	return roles, nil
+}
+
+func (c *Client) getScopesForClientRole(baseURL, realm, accessToken, clientID, roleName string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/scope", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var scopes []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&scopes)
+	return scopes, nil
+}
+
+func (c *Client) getPermissionsForScope(baseURL, realm, accessToken, clientID, scopeName string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/permission/scope", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var permissions []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&permissions)
+	return permissions, nil
+}
+
+func (c *Client) getPoliciesForPermission(baseURL, realm, accessToken, clientID, permissionName string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/policy", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var policies []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&policies)
+	return policies, nil
+}
+
+// getAllPermissionsForClient gets all permissions (resource and scope) for a client
+func (c *Client) getAllPermissionsForClient(baseURL, realm, accessToken, clientID string) ([]map[string]interface{}, error) {
+	var allPermissions []map[string]interface{}
+	
+	// Get resource permissions
+	resourcePerms, err := c.getResourcePermissions(baseURL, realm, accessToken, clientID)
+	if err == nil {
+		allPermissions = append(allPermissions, resourcePerms...)
+	}
+	
+	// Get scope permissions
+	scopePerms, err := c.getScopePermissions(baseURL, realm, accessToken, clientID)
+	if err == nil {
+		allPermissions = append(allPermissions, scopePerms...)
+	}
+	
+	return allPermissions, nil
+}
+
+// getResourcePermissions gets all resource permissions for a client
+func (c *Client) getResourcePermissions(baseURL, realm, accessToken, clientID string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/permission/resource", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var permissions []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&permissions)
+	return permissions, nil
+}
+
+// getScopePermissions gets all scope permissions for a client
+func (c *Client) getScopePermissions(baseURL, realm, accessToken, clientID string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/permission/scope", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return []map[string]interface{}{}, nil
+	}
+	
+	var permissions []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&permissions)
+	return permissions, nil
+}
+
+// permissionHasScope checks if a permission includes a specific scope
+func (c *Client) permissionHasScope(permission map[string]interface{}, scopeName string) bool {
+	if scopes, ok := permission["scopes"].([]interface{}); ok {
+		for _, scopeInterface := range scopes {
+			if scope, ok := scopeInterface.(map[string]interface{}); ok {
+				if getString(scope, "name") == scopeName {
+					return true
+				}
+			} else if scopeStr, ok := scopeInterface.(string); ok {
+				if scopeStr == scopeName {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// permissionHasAnyScope checks if a permission has any scopes
+func (c *Client) permissionHasAnyScope(permission map[string]interface{}) bool {
+	if scopes, ok := permission["scopes"].([]interface{}); ok {
+		return len(scopes) > 0
+	}
+	return false
+}
+
+// getPolicyByID gets a policy by its ID
+func (c *Client) getPolicyByID(baseURL, realm, accessToken, clientID, policyID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/authz/resource-server/policy/%s", baseURL, realm, clientID, policyID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get policy: status %d", resp.StatusCode)
+	}
+	
+	var policy map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&policy)
+	return policy, nil
+}
+
+// getUserByUsername gets a user by username
+func (c *Client) getUserByUsername(baseURL, realm, accessToken, username string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/users?username=%s&exact=true", baseURL, realm, username)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get user: status %d", resp.StatusCode)
+	}
+	
+	var users []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&users)
+	
+	if len(users) == 0 {
+		return nil, fmt.Errorf("user not found")
+	}
+	
+	return users[0], nil
+}
+
+// getClientByID gets a client by ID
+func (c *Client) getClientByID(baseURL, realm, accessToken, clientID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get client: status %d", resp.StatusCode)
+	}
+	
+	var client map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&client)
+	return client, nil
+}
+
+// getClientRoleDetails gets details of a client role
+func (c *Client) getClientRoleDetails(baseURL, realm, accessToken, clientID, roleName string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles/%s", baseURL, realm, clientID, roleName)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get client role: status %d", resp.StatusCode)
+	}
+	
+	var role map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&role)
+	return role, nil
+}
+
+// calculateRBACStats recursively counts RBAC components
+func (c *Client) calculateRBACStats(node domain.RBACNode) domain.RBACStats {
+	stats := domain.RBACStats{}
+	c.countRBACNodes(node, &stats)
+	return stats
+}
+
+func (c *Client) countRBACNodes(node domain.RBACNode, stats *domain.RBACStats) {
+	switch node.Type {
+	case "role":
+		stats.Roles++
+	case "composite":
+		stats.Composites++
+	case "client-role":
+		stats.ClientRoles++
+	case "scope":
+		stats.Scopes++
+	case "permission":
+		stats.Permissions++
+	case "policy":
+		stats.Policies++
+	}
+	
+	for _, child := range node.Children {
+		c.countRBACNodes(child, stats)
+	}
 }
 

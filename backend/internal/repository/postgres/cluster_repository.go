@@ -16,8 +16,8 @@ func NewClusterRepository(db *sql.DB) *ClusterRepository {
 
 func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 	query := `
-		INSERT INTO clusters (name, base_url, realm, username, password, group_name, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO clusters (name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
 	`
 	
@@ -30,6 +30,7 @@ func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 		cluster.Username,
 		cluster.Password,
 		cluster.GroupName,
+		cluster.MetricsEndpoint,
 		now,
 		now,
 	).Scan(&cluster.ID)
@@ -45,7 +46,7 @@ func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 
 func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 	query := `
-		SELECT id, name, base_url, realm, username, password, group_name, created_at, updated_at
+		SELECT id, name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at
 		FROM clusters
 		ORDER BY COALESCE(group_name, ''), name
 	`
@@ -67,6 +68,7 @@ func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 			&cluster.Username,
 			&cluster.Password,
 			&cluster.GroupName,
+			&cluster.MetricsEndpoint,
 			&cluster.CreatedAt,
 			&cluster.UpdatedAt,
 		)
@@ -81,7 +83,7 @@ func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 
 func (r *ClusterRepository) GetByID(id int) (*domain.Cluster, error) {
 	query := `
-		SELECT id, name, base_url, realm, username, password, group_name, created_at, updated_at
+		SELECT id, name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at
 		FROM clusters
 		WHERE id = $1
 	`
@@ -95,6 +97,7 @@ func (r *ClusterRepository) GetByID(id int) (*domain.Cluster, error) {
 		&cluster.Username,
 		&cluster.Password,
 		&cluster.GroupName,
+		&cluster.MetricsEndpoint,
 		&cluster.CreatedAt,
 		&cluster.UpdatedAt,
 	)
@@ -112,8 +115,8 @@ func (r *ClusterRepository) GetByID(id int) (*domain.Cluster, error) {
 func (r *ClusterRepository) Update(cluster *domain.Cluster) error {
 	query := `
 		UPDATE clusters 
-		SET name = $1, base_url = $2, realm = $3, username = $4, password = $5, group_name = $6, updated_at = $7
-		WHERE id = $8
+		SET name = $1, base_url = $2, realm = $3, username = $4, password = $5, group_name = $6, metrics_endpoint = $7, updated_at = $8
+		WHERE id = $9
 	`
 	
 	now := time.Now()
@@ -125,6 +128,7 @@ func (r *ClusterRepository) Update(cluster *domain.Cluster) error {
 		cluster.Username,
 		cluster.Password,
 		cluster.GroupName,
+		cluster.MetricsEndpoint,
 		now,
 		cluster.ID,
 	)

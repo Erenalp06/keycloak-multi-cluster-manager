@@ -232,6 +232,28 @@ func (s *ClusterService) GetClientDetails(id int) ([]domain.ClientDetail, error)
 	return s.keycloakClient.GetClientDetails(cluster.BaseURL, cluster.Realm, token)
 }
 
+func (s *ClusterService) GetClientSecret(clusterID int, clientID string) (string, error) {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return "", err
+	}
+	if cluster == nil {
+		return "", fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.keycloakClient.GetAccessToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.Username,
+		cluster.Password,
+	)
+	if err != nil {
+		return "", err
+	}
+	
+	return s.keycloakClient.GetClientSecret(cluster.BaseURL, cluster.Realm, token, clientID)
+}
+
 func (s *ClusterService) GetGroupDetails(id int) ([]domain.GroupDetail, error) {
 	cluster, err := s.repo.GetByID(id)
 	if err != nil {
@@ -316,6 +338,41 @@ func (s *ClusterService) GetUserToken(clusterID int, username, password, clientI
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user token: %w", err)
+	}
+
+	// Decode the token
+	decoded, err := s.keycloakClient.DecodeToken(tokenResp.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"access_token": tokenResp.AccessToken,
+		"token_type":   tokenResp.TokenType,
+		"expires_in":   tokenResp.ExpiresIn,
+		"decoded":      decoded,
+	}
+
+	return result, nil
+}
+
+func (s *ClusterService) GetClientCredentialsToken(clusterID int, clientID, clientSecret string) (map[string]interface{}, error) {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+
+	tokenResp, err := s.keycloakClient.GetClientCredentialsToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		clientID,
+		clientSecret,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get client credentials token: %w", err)
 	}
 
 	// Decode the token
@@ -440,5 +497,102 @@ func (s *ClusterService) GetPrometheusMetrics(id int) (*domain.PrometheusMetrics
 	
 	metrics.ClusterID = id
 	return metrics, nil
+}
+
+// Search performs multi-cluster search for users, clients, or roles
+func (s *ClusterService) Search(req domain.SearchRequest) (*domain.SearchResponse, error) {
+	// Get clusters to search
+	var clusters []*domain.Cluster
+	var err error
+	
+	if len(req.ClusterIDs) == 0 {
+		// Search all clusters
+		clusters, err = s.repo.GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get clusters: %w", err)
+		}
+	} else {
+		// Search specific clusters
+		clusters = make([]*domain.Cluster, 0, len(req.ClusterIDs))
+		for _, id := range req.ClusterIDs {
+			cluster, err := s.repo.GetByID(id)
+			if err != nil {
+				continue // Skip invalid cluster IDs
+			}
+			if cluster != nil {
+				clusters = append(clusters, cluster)
+			}
+		}
+	}
+	
+	var results []domain.SearchResult
+	
+	// Search each cluster
+	for _, cluster := range clusters {
+		token, err := s.keycloakClient.GetAccessToken(
+			cluster.BaseURL,
+			cluster.Realm,
+			cluster.Username,
+			cluster.Password,
+		)
+		if err != nil {
+			// Skip clusters that fail authentication
+			continue
+		}
+		
+		switch req.SearchType {
+		case "user":
+			users, err := s.keycloakClient.SearchUsers(cluster.BaseURL, cluster.Realm, token, req.Query)
+			if err == nil {
+				for _, user := range users {
+					results = append(results, domain.SearchResult{
+						ClusterID:   cluster.ID,
+						ClusterName: cluster.Name,
+						Realm:       cluster.Realm,
+						Type:        "user",
+						Data:        user,
+					})
+				}
+			}
+		case "client":
+			clients, err := s.keycloakClient.SearchClients(cluster.BaseURL, cluster.Realm, token, req.Query)
+			if err == nil {
+				for _, client := range clients {
+					results = append(results, domain.SearchResult{
+						ClusterID:   cluster.ID,
+						ClusterName: cluster.Name,
+						Realm:       cluster.Realm,
+						Type:        "client",
+						Data:        client,
+					})
+				}
+			}
+		case "role":
+			roles, err := s.keycloakClient.SearchRoles(cluster.BaseURL, cluster.Realm, token, req.Query)
+			if err == nil {
+				for _, role := range roles {
+					results = append(results, domain.SearchResult{
+						ClusterID:   cluster.ID,
+						ClusterName: cluster.Name,
+						Realm:       cluster.Realm,
+						Type:        "role",
+						Data: map[string]interface{}{
+							"id":          role.ID,
+							"name":        role.Name,
+							"description": role.Description,
+							"composite":   role.Composite,
+						},
+					})
+				}
+			}
+		}
+	}
+	
+	return &domain.SearchResponse{
+		Query:      req.Query,
+		SearchType: req.SearchType,
+		Results:    results,
+		Total:      len(results),
+	}, nil
 }
 

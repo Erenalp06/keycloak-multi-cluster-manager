@@ -267,6 +267,26 @@ export const clusterApi = {
     return response.json();
   },
 
+  search: async (query: string, searchType: 'user' | 'client' | 'role', clusterIds?: number[]): Promise<any> => {
+    const body: any = {
+      query,
+      search_type: searchType,
+    };
+    if (clusterIds && clusterIds.length > 0) {
+      body.cluster_ids = clusterIds;
+    }
+    const response = await fetch(`${API_URL}/clusters/search`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to search' }));
+      throw new Error(error.error || 'Failed to search');
+    }
+    return response.json();
+  },
+
   getById: async (id: number): Promise<Cluster> => {
     const response = await fetch(`${API_URL}/clusters/${id}`, {
       headers: getAuthHeaders(),
@@ -331,6 +351,16 @@ export const clusterApi = {
     });
     if (!response.ok) {
       throw new Error('Failed to fetch clients');
+    }
+    return response.json();
+  },
+
+  getClientSecret: async (id: number, clientId: string): Promise<{ secret: string }> => {
+    const response = await fetch(`${API_URL}/clusters/${id}/clients/secret?clientId=${encodeURIComponent(clientId)}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to fetch client secret');
     }
     return response.json();
   },
@@ -434,15 +464,41 @@ export const clusterApi = {
     return response.json();
   },
 
-  getUserToken: async (id: number, username: string, password: string, clientId?: string): Promise<any> => {
+  getUserToken: async (
+    id: number, 
+    grantType: 'password' | 'client_credentials',
+    username?: string, 
+    password?: string, 
+    clientId?: string,
+    clientSecret?: string
+  ): Promise<any> => {
+    const body: any = { grant_type: grantType };
+    
+    if (grantType === 'password') {
+      if (!username || !password) {
+        throw new Error('Username and password are required for password grant');
+      }
+      body.username = username;
+      body.password = password;
+      if (clientId && clientId.trim() !== '') {
+        body.client_id = clientId.trim();
+      }
+    } else if (grantType === 'client_credentials') {
+      if (!clientId || !clientSecret) {
+        throw new Error('Client ID and client secret are required for client_credentials grant');
+      }
+      body.client_id = clientId.trim();
+      body.client_secret = clientSecret;
+    }
+    
     const response = await fetch(`${API_URL}/clusters/${id}/user-token`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ username, password, client_id: clientId || 'admin-cli' }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Failed to get user token' }));
-      throw new Error(error.error || 'Failed to get user token');
+      const error = await response.json().catch(() => ({ error: 'Failed to get token' }));
+      throw new Error(error.error || 'Failed to get token');
     }
     return response.json();
   },

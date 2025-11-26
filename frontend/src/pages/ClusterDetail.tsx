@@ -4,19 +4,35 @@ import { clusterApi, roleApi, exportImportApi, Cluster, Role, ClusterMetrics, Pr
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ArrowLeft, RefreshCw, Shield, Building2, Key, Users, Network, Activity, Server, Globe, Calendar, User, CheckCircle2, AlertCircle, ChevronRight, Clock, Download, Upload, MoreVertical, FileJson, Search, Eye, Copy, Check, Layers } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { ArrowLeft, RefreshCw, Shield, Building2, Key, Users, Network, Activity, Server, Globe, Calendar, User, CheckCircle2, AlertCircle, ChevronRight, Clock, Download, Upload, MoreVertical, FileJson, Search, Eye, Copy, Check, Layers, Filter, X, Terminal } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import ClusterErrorState from '@/components/ClusterErrorState';
+import TokenInspectorDialog from '@/components/TokenInspectorDialog';
 
 export default function ClusterDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [cluster, setCluster] = useState<Cluster | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [clients, setClients] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<ClusterMetrics | null>(null);
   const [prometheusMetrics, setPrometheusMetrics] = useState<PrometheusMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingRoles, setLoadingRoles] = useState(false);
+  const [loadingClients, setLoadingClients] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [clientSearchTerm, setClientSearchTerm] = useState('');
+  const [clientFilterEnabled, setClientFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [userSearchTerm, setUserSearchTerm] = useState('');
+  const [userFilterEnabled, setUserFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'roles' | 'users'>('overview');
+  const [selectedClient, setSelectedClient] = useState<any | null>(null);
+  const [clientDetailDialog, setClientDetailDialog] = useState(false);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [loadingClientSecret, setLoadingClientSecret] = useState(false);
+  const [showClientSecret, setShowClientSecret] = useState(false);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
   const [loadingPrometheusMetrics, setLoadingPrometheusMetrics] = useState(false);
   const [healthStatus, setHealthStatus] = useState<{ status: string; message?: string } | null>(null);
@@ -52,11 +68,6 @@ export default function ClusterDetail() {
   const [selectedExportItems, setSelectedExportItems] = useState<Set<string>>(new Set());
   const [loadingExportItems, setLoadingExportItems] = useState(false);
   const [tokenInspectorDialog, setTokenInspectorDialog] = useState(false);
-  const [selectedUsername, setSelectedUsername] = useState('');
-  const [userPassword, setUserPassword] = useState('');
-  const [clientId, setClientId] = useState('admin-cli');
-  const [tokenData, setTokenData] = useState<any>(null);
-  const [loadingToken, setLoadingToken] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,6 +75,8 @@ export default function ClusterDetail() {
       loadCluster();
       loadMetrics();
       loadRoles();
+      loadClients();
+      loadUsers();
       checkHealth();
       loadServerInfo();
       // Only load Prometheus metrics if cluster has metrics_endpoint configured
@@ -161,6 +174,46 @@ export default function ClusterDetail() {
       }
     } finally {
       setLoadingRoles(false);
+    }
+  };
+
+  const loadClients = async () => {
+    if (!id) return;
+    try {
+      setLoadingClients(true);
+      setError(null);
+      const data = await clusterApi.getClients(Number(id));
+      setClients(data || []);
+    } catch (error: any) {
+      console.error('Failed to load clients:', error);
+      if (!error.message?.includes('connection refused')) {
+        setError({
+          message: error.message || 'Failed to load clients',
+          type: 'connection',
+        });
+      }
+    } finally {
+      setLoadingClients(false);
+    }
+  };
+
+  const loadUsers = async () => {
+    if (!id) return;
+    try {
+      setLoadingUsers(true);
+      setError(null);
+      const data = await clusterApi.getUsers(Number(id), 100);
+      setUsers(data || []);
+    } catch (error: any) {
+      console.error('Failed to load users:', error);
+      if (!error.message?.includes('connection refused')) {
+        setError({
+          message: error.message || 'Failed to load users',
+          type: 'connection',
+        });
+      }
+    } finally {
+      setLoadingUsers(false);
     }
   };
 
@@ -328,21 +381,6 @@ export default function ClusterDetail() {
       alert(`Failed to import ${exportImportDialog.type}: ${error.message}`);
     } finally {
       setImporting(false);
-    }
-  };
-
-  const handleGetUserToken = async () => {
-    if (!id || !selectedUsername || !userPassword) return;
-    setLoadingToken(true);
-    setTokenData(null);
-    try {
-      const data = await clusterApi.getUserToken(Number(id), selectedUsername, userPassword, clientId);
-      setTokenData(data);
-    } catch (error: any) {
-      console.error('Failed to get user token:', error);
-      alert(`Failed to get user token: ${error.message}`);
-    } finally {
-      setLoadingToken(false);
     }
   };
 
@@ -932,8 +970,92 @@ export default function ClusterDetail() {
         </Card>
       )}
 
+      {/* Tabs Navigation */}
+      <div className="mt-6 border-b border-gray-200">
+        <nav className="flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`
+              py-4 px-1 border-b-2 font-medium text-sm transition-colors
+              ${activeTab === 'overview'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
+          >
+            <div className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              Overview
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('clients')}
+            className={`
+              py-4 px-1 border-b-2 font-medium text-sm transition-colors
+              ${activeTab === 'clients'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
+          >
+            <div className="flex items-center gap-2">
+              <Building2 className="h-4 w-4" />
+              Clients
+              {clients.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
+                  {clients.length}
+                </span>
+              )}
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('roles')}
+            className={`
+              py-4 px-1 border-b-2 font-medium text-sm transition-colors
+              ${activeTab === 'roles'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
+          >
+            <div className="flex items-center gap-2">
+              <Key className="h-4 w-4" />
+              Roles
+              {roles.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
+                  {roles.length}
+                </span>
+              )}
+            </div>
+          </button>
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`
+              py-4 px-1 border-b-2 font-medium text-sm transition-colors
+              ${activeTab === 'users'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
+          >
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Users
+              {users.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded-full">
+                  {users.length}
+                </span>
+              )}
+            </div>
+          </button>
+        </nav>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'overview' && (
+        <>
       {/* Cluster Information & Quick Actions - 2 Column Grid */}
-      <div className="grid gap-6 lg:grid-cols-2 mb-6">
+          <div className="grid gap-6 lg:grid-cols-2 mt-6">
         {/* Cluster Information - 2 Column Layout */}
         <Card className="border border-gray-200 shadow-sm">
           <CardHeader className="pb-3">
@@ -1000,7 +1122,7 @@ export default function ClusterDetail() {
               <Button
                 variant="outline"
                 className="w-full justify-between text-sm h-10 hover:bg-gray-50 hover:border-gray-300 transition-colors group"
-                onClick={() => handleMetricClick('clients')}
+                    onClick={() => setActiveTab('clients')}
               >
                 <div className="flex items-center">
                   <Building2 className="mr-2 h-4 w-4" />
@@ -1011,7 +1133,7 @@ export default function ClusterDetail() {
               <Button
                 variant="outline"
                 className="w-full justify-between text-sm h-10 hover:bg-gray-50 hover:border-gray-300 transition-colors group"
-                onClick={() => handleMetricClick('users')}
+                    onClick={() => setActiveTab('users')}
               >
                 <div className="flex items-center">
                   <Users className="mr-2 h-4 w-4" />
@@ -1033,7 +1155,7 @@ export default function ClusterDetail() {
               <Button
                 variant="outline"
                 className="w-full justify-between text-sm h-10 hover:bg-gray-50 hover:border-gray-300 transition-colors group"
-                onClick={() => handleMetricClick('roles')}
+                    onClick={() => setActiveTab('roles')}
               >
                 <div className="flex items-center">
                   <Key className="mr-2 h-4 w-4" />
@@ -1067,10 +1189,323 @@ export default function ClusterDetail() {
             </div>
           </CardContent>
         </Card>
+          </div>
 
+          {/* Prometheus Metrics - Only show if metrics_endpoint is configured */}
+          {cluster?.metrics_endpoint && prometheusMetrics && (
+            <Card className="border border-gray-200 shadow-sm mt-6">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                      <Activity className="h-5 w-5 text-gray-600" />
+                      Prometheus Metrics
+                    </CardTitle>
+                    <CardDescription className="text-xs text-gray-500 mt-0.5">
+                      Real-time metrics from Prometheus endpoint
+                    </CardDescription>
+                  </div>
+                  {prometheusMetrics.available ? (
+                    <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-md border border-green-200">
+                      Available
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 bg-gray-100 text-gray-600 text-xs font-medium rounded-md border border-gray-200">
+                      Not Available
+                    </span>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {loadingPrometheusMetrics ? (
+                  <div className="flex items-center justify-center py-8">
+                    <span className="inline-block w-6 h-6 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
+                    <span className="ml-2 text-sm text-gray-500">Loading Prometheus metrics...</span>
+                  </div>
+                ) : prometheusMetrics.available ? (
+                  <div className="space-y-4">
+                    {/* Health Row */}
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700 mb-2">📌 Health Row</div>
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+                          <div className="text-xs text-gray-600 mb-1">Uptime</div>
+                          <div className="text-lg font-bold text-gray-900">
+                            {prometheusMetrics.uptime ? formatUptime(prometheusMetrics.uptime) : '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+                          <div className="text-xs text-gray-600 mb-1">Active Sessions</div>
+                          <div className="text-lg font-bold text-gray-900">
+                            {prometheusMetrics.active_sessions?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-yellow-50 rounded-lg border border-yellow-100">
+                          <div className="text-xs text-gray-600 mb-1">JVM Heap %</div>
+                          <div className="text-lg font-bold text-gray-900">
+                            {prometheusMetrics.jvm_heap_percent?.toFixed(1) || '-'}%
+                          </div>
+                        </div>
+                        <div className="p-3 bg-purple-50 rounded-lg border border-purple-100">
+                          <div className="text-xs text-gray-600 mb-1">DB Pool Usage</div>
+                          <div className="text-lg font-bold text-gray-900">
+                            {prometheusMetrics.db_pool_usage?.toFixed(1) || '-'}%
+                          </div>
+                        </div>
+                      </div>
       </div>
 
-      {/* Roles List */}
+                    {/* Traffic Row */}
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700 mb-2">📌 Traffic Row</div>
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+                          <div className="text-xs text-gray-600 mb-1">Logins (1 min)</div>
+                          <div className="text-lg font-bold text-green-700">
+                            {prometheusMetrics.logins_1min?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-red-50 rounded-lg border border-red-100">
+                          <div className="text-xs text-gray-600 mb-1">Failed Logins (1 min)</div>
+                          <div className="text-lg font-bold text-red-700">
+                            {prometheusMetrics.failed_logins_1min?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+                          <div className="text-xs text-gray-600 mb-1">Token Requests</div>
+                          <div className="text-lg font-bold text-blue-700">
+                            {prometheusMetrics.token_requests?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-orange-50 rounded-lg border border-orange-100">
+                          <div className="text-xs text-gray-600 mb-1">Token Errors</div>
+                          <div className="text-lg font-bold text-orange-700">
+                            {prometheusMetrics.token_errors?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Performance Row */}
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700 mb-2">📌 Performance Row</div>
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                          <div className="text-xs text-gray-600 mb-1">Avg Request Duration</div>
+                          <div className="text-lg font-bold text-gray-900">
+                            {prometheusMetrics.avg_request_duration ? `${((prometheusMetrics.avg_request_duration || 0) * 1000).toFixed(0)}ms` : '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                          <div className="text-xs text-gray-600 mb-1">Token Endpoint Latency</div>
+                          <div className="text-lg font-bold text-indigo-700">
+                            {prometheusMetrics.token_endpoint_latency ? `${((prometheusMetrics.token_endpoint_latency || 0) * 1000).toFixed(0)}ms` : '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-teal-50 rounded-lg border border-teal-100">
+                          <div className="text-xs text-gray-600 mb-1">HTTP Request Count</div>
+                          <div className="text-lg font-bold text-teal-700">
+                            {prometheusMetrics.http_request_count?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-pink-50 rounded-lg border border-pink-100">
+                          <div className="text-xs text-gray-600 mb-1">GC Pauses (5 min)</div>
+                          <div className="text-lg font-bold text-pink-700">
+                            {prometheusMetrics.gc_pauses_5min ? `${(prometheusMetrics.gc_pauses_5min || 0).toFixed(2)}s` : '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cache Row */}
+                    <div>
+                      <div className="text-xs font-semibold text-gray-700 mb-2">📌 Cache Row</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="p-3 bg-cyan-50 rounded-lg border border-cyan-100">
+                          <div className="text-xs text-gray-600 mb-1">Cache Hit Rate</div>
+                          <div className="text-lg font-bold text-cyan-700">
+                            {prometheusMetrics.cache_hit_rate?.toFixed(1) || '-'}%
+                          </div>
+                        </div>
+                        <div className="p-3 bg-amber-50 rounded-lg border border-amber-100">
+                          <div className="text-xs text-gray-600 mb-1">Cache Misses</div>
+                          <div className="text-lg font-bold text-amber-700">
+                            {prometheusMetrics.cache_misses?.toFixed(0) || '-'}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+                          <div className="text-xs text-gray-600 mb-1">Infinispan Metrics</div>
+                          <div className="text-lg font-bold text-slate-700">
+                            {prometheusMetrics.infinispan_metrics ? Object.keys(prometheusMetrics.infinispan_metrics || {}).length : '-'} metrics
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-6 text-center">
+                    <AlertCircle className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                    <p className="text-sm text-gray-600 mb-1">Prometheus metrics not available</p>
+                    {prometheusMetrics.error && (
+                      <p className="text-xs text-gray-500">{prometheusMetrics.error}</p>
+                    )}
+                    {cluster.metrics_endpoint && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        Endpoint: {cluster.metrics_endpoint}
+                      </p>
+                    )}
+                    {!cluster.metrics_endpoint && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        Please configure metrics endpoint in cluster settings
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+
+      {activeTab === 'clients' && (
+        <Card className="border border-gray-200 shadow-sm mt-6">
+        <CardHeader className="pb-3">
+          <div className="flex justify-between items-center">
+            <div>
+              <CardTitle className="text-base font-semibold text-gray-900">Clients</CardTitle>
+              <CardDescription className="text-xs text-gray-500 mt-0.5">
+                List of clients in the {cluster.realm} realm ({clients.length} total)
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button 
+                onClick={loadClients} 
+                disabled={loadingClients}
+                variant="outline"
+                size="sm"
+                className="text-xs h-8"
+              >
+                <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loadingClients ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+          {/* Search and Filter */}
+          <div className="flex items-center gap-3 mt-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search clients by name or client ID..."
+                value={clientSearchTerm}
+                onChange={(e) => setClientSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              {clientSearchTerm && (
+                <button
+                  onClick={() => setClientSearchTerm('')}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-gray-400" />
+              <select
+                value={clientFilterEnabled}
+                onChange={(e) => setClientFilterEnabled(e.target.value as 'all' | 'enabled' | 'disabled')}
+                className="text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Clients</option>
+                <option value="enabled">Enabled Only</option>
+                <option value="disabled">Disabled Only</option>
+              </select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {loadingClients ? (
+            <div className="py-8 text-center">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-400 mx-auto mb-2"></div>
+              <p className="text-xs text-gray-500">Loading clients...</p>
+            </div>
+          ) : (() => {
+            // Filter clients
+            const filteredClients = clients.filter((client) => {
+              const matchesSearch = !clientSearchTerm || 
+                (client.clientId || '').toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                (client.name || '').toLowerCase().includes(clientSearchTerm.toLowerCase()) ||
+                (client.description || '').toLowerCase().includes(clientSearchTerm.toLowerCase());
+              
+              const matchesFilter = clientFilterEnabled === 'all' ||
+                (clientFilterEnabled === 'enabled' && client.enabled) ||
+                (clientFilterEnabled === 'disabled' && !client.enabled);
+              
+              return matchesSearch && matchesFilter;
+            });
+
+            if (filteredClients.length === 0) {
+              return (
+                <div className="py-8 text-center text-sm text-gray-500">
+                  {clients.length === 0 ? 'No clients found' : 'No clients match your search criteria'}
+                </div>
+              );
+            }
+
+            return (
+              <div>
+                {filteredClients.map((client, index) => (
+                  <div
+                    key={client.id || client.clientId}
+                    onClick={() => {
+                      setSelectedClient(client);
+                      setClientDetailDialog(true);
+                      setClientSecret(null);
+                      setShowClientSecret(false);
+                    }}
+                    className={`px-6 py-3 transition-colors cursor-pointer ${
+                      index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                    } hover:bg-blue-50 border-b border-gray-100 last:border-b-0`}
+                  >
+                    <div className="flex justify-between items-center gap-4">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <Building2 className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-gray-900 truncate">{client.clientId || client.name || 'N/A'}</h3>
+                            {client.enabled ? (
+                              <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded border border-green-300 flex-shrink-0">
+                                Enabled
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded border border-gray-300 flex-shrink-0">
+                                Disabled
+                              </span>
+                            )}
+                          </div>
+                          {client.name && client.name !== client.clientId && (
+                            <p className="text-xs text-gray-600 mt-0.5 truncate">{client.name}</p>
+                          )}
+                          {client.protocol && (
+                            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
+                              {client.protocol}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </CardContent>
+      </Card>
+      )}
+
+      {activeTab === 'roles' && (
       <Card className="border border-gray-200 shadow-sm mt-6">
         <CardHeader className="pb-3">
           <div className="flex justify-between items-center">
@@ -1090,16 +1525,16 @@ export default function ClusterDetail() {
                 <Layers className="mr-1.5 h-3.5 w-3.5" />
                 Permission Analyzer
               </Button>
-              <Button 
-                onClick={loadRoles} 
-                disabled={loadingRoles}
-                variant="outline"
-                size="sm"
-                className="text-xs h-8"
-              >
-                <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loadingRoles ? 'animate-spin' : ''}`} />
-                Refresh
-              </Button>
+            <Button 
+              onClick={loadRoles} 
+              disabled={loadingRoles}
+              variant="outline"
+              size="sm"
+              className="text-xs h-8"
+            >
+              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loadingRoles ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
             </div>
           </div>
         </CardHeader>
@@ -1150,6 +1585,409 @@ export default function ClusterDetail() {
           )}
         </CardContent>
       </Card>
+      )}
+
+      {activeTab === 'users' && (
+        <Card className="border border-gray-200 shadow-sm mt-6">
+          <CardHeader className="pb-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <CardTitle className="text-base font-semibold text-gray-900">Users</CardTitle>
+                <CardDescription className="text-xs text-gray-500 mt-0.5">
+                  List of users in the {cluster.realm} realm ({users.length} total)
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button 
+                  onClick={loadUsers} 
+                  disabled={loadingUsers}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs h-8"
+                >
+                  <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loadingUsers ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+            </div>
+            {/* Search and Filter */}
+            <div className="flex items-center gap-3 mt-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search users by username or email..."
+                  value={userSearchTerm}
+                  onChange={(e) => setUserSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                {userSearchTerm && (
+                  <button
+                    onClick={() => setUserSearchTerm('')}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4 text-gray-400" />
+                <select
+                  value={userFilterEnabled}
+                  onChange={(e) => setUserFilterEnabled(e.target.value as 'all' | 'enabled' | 'disabled')}
+                  className="text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="all">All Users</option>
+                  <option value="enabled">Enabled Only</option>
+                  <option value="disabled">Disabled Only</option>
+                </select>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loadingUsers ? (
+              <div className="py-8 text-center">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-400 mx-auto mb-2"></div>
+                <p className="text-xs text-gray-500">Loading users...</p>
+              </div>
+            ) : (() => {
+              // Filter users
+              const filteredUsers = users.filter((user) => {
+                const matchesSearch = !userSearchTerm || 
+                  (user.username || '').toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                  (user.email || '').toLowerCase().includes(userSearchTerm.toLowerCase()) ||
+                  ((user.firstName || '') + ' ' + (user.lastName || '')).toLowerCase().includes(userSearchTerm.toLowerCase());
+                
+                const matchesFilter = userFilterEnabled === 'all' ||
+                  (userFilterEnabled === 'enabled' && user.enabled) ||
+                  (userFilterEnabled === 'disabled' && !user.enabled);
+                
+                return matchesSearch && matchesFilter;
+              });
+
+              if (filteredUsers.length === 0) {
+                return (
+                  <div className="py-8 text-center text-sm text-gray-500">
+                    {users.length === 0 ? 'No users found' : 'No users match your search criteria'}
+                  </div>
+                );
+              }
+
+              return (
+                <div>
+                  {filteredUsers.map((user, index) => (
+                    <div
+                      key={user.id || user.username}
+                      className={`px-6 py-4 transition-colors ${
+                        index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                      } hover:bg-gray-100 border-b border-gray-100 last:border-b-0`}
+                    >
+                      <div className="flex justify-between items-start gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <User className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                            <h3 className="text-sm font-bold text-gray-900">{user.username || user.email || 'N/A'}</h3>
+                            {user.enabled ? (
+                              <span className="px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 rounded border border-green-300 flex-shrink-0">
+                                Enabled
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded border border-gray-300 flex-shrink-0">
+                                Disabled
+                              </span>
+                            )}
+                          </div>
+                          {(user.firstName || user.lastName) && (
+                            <p className="text-xs text-gray-600 ml-6 mb-1.5 font-medium">
+                              {user.firstName} {user.lastName}
+                            </p>
+                          )}
+                          {user.email && (
+                            <p className="text-xs text-gray-500 ml-6 mb-2">
+                              {user.email}
+                            </p>
+                          )}
+                          {user.id && (
+                            <p className="text-xs text-gray-400 ml-6">
+                              ID: {user.id}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/clusters/${id}/permission-analyzer?entityType=user&entityName=${encodeURIComponent(user.username || user.email || '')}`)}
+                            className="text-xs h-7 px-2"
+                            title="Analyze permissions for this user"
+                          >
+                            <Layers className="h-3.5 w-3.5 mr-1" />
+                            Analyze
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Client Detail Dialog */}
+      <Dialog open={clientDetailDialog} onOpenChange={setClientDetailDialog}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-lg flex items-center gap-2">
+              <Building2 className="h-5 w-5 text-blue-600" />
+              {selectedClient?.clientId || selectedClient?.name || 'Client Details'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Detailed information about the client
+            </DialogDescription>
+          </DialogHeader>
+          {selectedClient && (
+            <div className="flex-1 overflow-y-auto mt-4 space-y-6">
+              {/* Basic Information */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Basic Information</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-gray-500">Client ID</label>
+                    <p className="text-sm font-medium text-gray-900 mt-1">{selectedClient.clientId || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Name</label>
+                    <p className="text-sm font-medium text-gray-900 mt-1">{selectedClient.name || 'N/A'}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs text-gray-500">Description</label>
+                    <p className="text-sm text-gray-900 mt-1">{selectedClient.description || 'No description'}</p>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Protocol</label>
+                    <p className="text-sm font-medium text-gray-900 mt-1">{selectedClient.protocol || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Status</label>
+                    <div className="mt-1">
+                      {selectedClient.enabled ? (
+                        <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-700 rounded border border-green-300">
+                          Enabled
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded border border-gray-300">
+                          Disabled
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Client ID (UUID)</label>
+                    <p className="text-xs font-mono text-gray-600 mt-1 break-all">{selectedClient.id || 'N/A'}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Client Type & Capabilities */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Client Type & Capabilities</h3>
+                <div className="flex flex-wrap gap-2">
+                  {selectedClient.publicClient && (
+                    <span className="px-3 py-1.5 text-xs font-medium bg-purple-50 text-purple-700 rounded border border-purple-200">
+                      Public Client
+                    </span>
+                  )}
+                  {selectedClient.bearerOnly && (
+                    <span className="px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-700 rounded border border-indigo-200">
+                      Bearer Only
+                    </span>
+                  )}
+                  {selectedClient.serviceAccountsEnabled && (
+                    <span className="px-3 py-1.5 text-xs font-medium bg-green-50 text-green-700 rounded border border-green-200">
+                      Service Accounts Enabled
+                    </span>
+                  )}
+                  {selectedClient.directAccessGrantsEnabled && (
+                    <span className="px-3 py-1.5 text-xs font-medium bg-amber-50 text-amber-700 rounded border border-amber-200">
+                      Direct Access Grants Enabled
+                    </span>
+                  )}
+                  {!selectedClient.publicClient && !selectedClient.bearerOnly && (
+                    <span className="px-3 py-1.5 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
+                      Confidential Client
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Client Credentials */}
+              {!selectedClient.publicClient && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Client Credentials</h3>
+                  <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                    <div>
+                      <label className="text-xs text-gray-500">Client ID</label>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded text-sm font-mono text-gray-900 break-all">
+                          {selectedClient.clientId}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => copyToClipboard(selectedClient.clientId, 'client-id')}
+                          className="h-8"
+                        >
+                          {copiedField === 'client-id' ? (
+                            <Check className="h-4 w-4 text-green-600" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-500">Client Secret</label>
+                      <div className="flex items-center gap-2 mt-1">
+                        {loadingClientSecret ? (
+                          <div className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded text-sm text-gray-500">
+                            Loading...
+                          </div>
+                        ) : clientSecret ? (
+                          <>
+                            <code className={`flex-1 px-3 py-2 bg-white border border-gray-300 rounded text-sm font-mono break-all ${
+                              showClientSecret ? 'text-gray-900' : 'text-gray-400'
+                            }`}>
+                              {showClientSecret ? clientSecret : '••••••••••••••••••••••••••••••••'}
+                            </code>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowClientSecret(!showClientSecret)}
+                              className="h-8"
+                            >
+                              {showClientSecret ? <Eye className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyToClipboard(clientSecret, 'client-secret')}
+                              className="h-8"
+                            >
+                              {copiedField === 'client-secret' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              if (!id || !selectedClient.id) return;
+                              setLoadingClientSecret(true);
+                              try {
+                                const response = await clusterApi.getClientSecret(Number(id), selectedClient.id);
+                                setClientSecret(response.secret);
+                                setShowClientSecret(true);
+                              } catch (error: any) {
+                                console.error('Failed to load client secret:', error);
+                                alert('Failed to load client secret: ' + (error.message || 'Unknown error'));
+                              } finally {
+                                setLoadingClientSecret(false);
+                              }
+                            }}
+                            className="h-8"
+                          >
+                            Load Secret
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {selectedClient.publicClient 
+                          ? 'Public clients do not have secrets' 
+                          : 'Click "Load Secret" to retrieve the client secret'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Redirect URIs */}
+              {selectedClient.redirectUris && selectedClient.redirectUris.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Redirect URIs</h3>
+                  <div className="space-y-1">
+                    {selectedClient.redirectUris.map((uri: string, idx: number) => (
+                      <code key={idx} className="block px-3 py-2 bg-gray-50 border border-gray-200 rounded text-xs font-mono text-gray-900 break-all">
+                        {uri}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Web Origins */}
+              {selectedClient.webOrigins && selectedClient.webOrigins.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Web Origins</h3>
+                  <div className="space-y-1">
+                    {selectedClient.webOrigins.map((origin: string, idx: number) => (
+                      <code key={idx} className="block px-3 py-2 bg-gray-50 border border-gray-200 rounded text-xs font-mono text-gray-900 break-all">
+                        {origin}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Default Client Scopes */}
+              {selectedClient.defaultClientScopes && selectedClient.defaultClientScopes.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Default Client Scopes</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedClient.defaultClientScopes.map((scope: string, idx: number) => (
+                      <span key={idx} className="px-2 py-1 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
+                        {scope}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Optional Client Scopes */}
+              {selectedClient.optionalClientScopes && selectedClient.optionalClientScopes.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900 border-b pb-2">Optional Client Scopes</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedClient.optionalClientScopes.map((scope: string, idx: number) => (
+                      <span key={idx} className="px-2 py-1 text-xs font-medium bg-gray-50 text-gray-700 rounded border border-gray-200">
+                        {scope}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex items-center gap-2 pt-4 border-t">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate(`/clusters/${id}/permission-analyzer?entityType=client&entityName=${encodeURIComponent(selectedClient.clientId || selectedClient.name || '')}`)}
+                  className="text-xs"
+                >
+                  <Layers className="h-3.5 w-3.5 mr-1.5" />
+                  Permission Analyzer
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Detail Dialog */}
       <Dialog open={detailDialog.open} onOpenChange={(open) => setDetailDialog({ ...detailDialog, open })}>
@@ -1402,292 +2240,11 @@ export default function ClusterDetail() {
       </Dialog>
 
       {/* Token Inspector Dialog */}
-      <Dialog open={tokenInspectorDialog} onOpenChange={setTokenInspectorDialog}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Eye className="h-5 w-5 text-purple-600" />
-              User Token Inspector
-            </DialogTitle>
-            <DialogDescription>
-              Get and inspect access token for a Keycloak user
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4 overflow-y-auto flex-1">
-            {/* Input Form */}
-            {!tokenData && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Username
-                  </label>
-                  <input
-                    type="text"
-                    value={selectedUsername}
-                    onChange={(e) => setSelectedUsername(e.target.value)}
-                    placeholder="Enter username"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    value={userPassword}
-                    onChange={(e) => setUserPassword(e.target.value)}
-                    placeholder="Enter password"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Client ID (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                    placeholder="admin-cli"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <Button
-                  onClick={handleGetUserToken}
-                  disabled={!selectedUsername || !userPassword || loadingToken}
-                  className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                >
-                  {loadingToken ? 'Getting Token...' : 'Get Token'}
-                </Button>
-              </div>
-            )}
-
-            {/* Token Display */}
-            {tokenData && (
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-lg font-semibold text-gray-900">Token Information</h3>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setTokenData(null);
-                      setSelectedUsername('');
-                      setUserPassword('');
-                    }}
-                  >
-                    Inspect Another Token
-                  </Button>
-                </div>
-
-                {/* Token Type & Expiration */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <div className="text-xs text-gray-500 mb-1">Token Type</div>
-                    <div className="text-sm font-medium text-gray-900">{tokenData.token_type}</div>
-                  </div>
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <div className="text-xs text-gray-500 mb-1">Expires In</div>
-                    <div className="text-sm font-medium text-gray-900">{tokenData.expires_in} seconds</div>
-                  </div>
-                </div>
-
-                {/* Access Token */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Access Token</label>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => copyToClipboard(tokenData.access_token, 'token')}
-                      className="h-7 text-xs"
-                    >
-                      {copiedField === 'token' ? (
-                        <>
-                          <Check className="h-3 w-3 mr-1" />
-                          Copied
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3 w-3 mr-1" />
-                          Copy
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                  <textarea
-                    readOnly
-                    value={tokenData.access_token}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 font-mono text-xs h-24 resize-none"
-                  />
-                </div>
-
-                {/* Decoded Token Sections */}
-                {tokenData.decoded && (
-                  <div className="space-y-4">
-                    {/* Header */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-semibold text-gray-900">Header</label>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => copyToClipboard(JSON.stringify(tokenData.decoded.header, null, 2), 'header')}
-                          className="h-7 text-xs"
-                        >
-                          {copiedField === 'header' ? (
-                            <>
-                              <Check className="h-3 w-3 mr-1" />
-                              Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-3 w-3 mr-1" />
-                              Copy
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                      <pre className="bg-gray-50 border border-gray-300 rounded-md p-3 text-xs overflow-x-auto">
-                        {JSON.stringify(tokenData.decoded.header, null, 2)}
-                      </pre>
-                    </div>
-
-                    {/* Payload */}
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm font-semibold text-gray-900">Payload</label>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => copyToClipboard(JSON.stringify(tokenData.decoded.payload, null, 2), 'payload')}
-                          className="h-7 text-xs"
-                        >
-                          {copiedField === 'payload' ? (
-                            <>
-                              <Check className="h-3 w-3 mr-1" />
-                              Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="h-3 w-3 mr-1" />
-                              Copy
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                      <pre className="bg-gray-50 border border-gray-300 rounded-md p-3 text-xs overflow-x-auto max-h-64 overflow-y-auto">
-                        {JSON.stringify(tokenData.decoded.payload, null, 2)}
-                      </pre>
-                    </div>
-
-                    {/* Claims Summary */}
-                    {tokenData.decoded.claims && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                        <h4 className="text-sm font-semibold text-gray-900 mb-3">Claims Summary</h4>
-                        <div className="space-y-2 text-sm">
-                          {tokenData.decoded.claims.subject && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Subject:</span>
-                              <span className="font-mono text-gray-900">{tokenData.decoded.claims.subject}</span>
-                            </div>
-                          )}
-                          {tokenData.decoded.claims.username && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Username:</span>
-                              <span className="font-medium text-gray-900">{tokenData.decoded.claims.username}</span>
-                            </div>
-                          )}
-                          {tokenData.decoded.claims.email && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Email:</span>
-                              <span className="font-medium text-gray-900">{tokenData.decoded.claims.email}</span>
-                            </div>
-                          )}
-                          {tokenData.decoded.claims.expiration && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Expiration:</span>
-                              <span className="font-medium text-gray-900">
-                                {formatDate(tokenData.decoded.claims.expiration as number)}
-                              </span>
-                            </div>
-                          )}
-                          {tokenData.decoded.claims.issued_at && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Issued At:</span>
-                              <span className="font-medium text-gray-900">
-                                {formatDate(tokenData.decoded.claims.issued_at as number)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Roles */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Realm Roles */}
-                      {tokenData.decoded.claims.realm_roles && (
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                          <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                            <Key className="h-4 w-4" />
-                            Realm Roles
-                          </h4>
-                          <div className="flex flex-wrap gap-2">
-                            {(tokenData.decoded.claims.realm_roles as string[]).map((role: string, idx: number) => (
-                              <span key={idx} className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium">
-                                {role}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Client Roles */}
-                      {tokenData.decoded.claims.client_roles && (
-                        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                          <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                            <Building2 className="h-4 w-4" />
-                            Client Roles
-                          </h4>
-                          <div className="space-y-2">
-                            {Object.entries(tokenData.decoded.claims.client_roles as Record<string, string[]>).map(([clientId, roles]) => (
-                              <div key={clientId}>
-                                <div className="text-xs font-medium text-gray-700 mb-1">{clientId}:</div>
-                                <div className="flex flex-wrap gap-2">
-                                  {roles.map((role: string, idx: number) => (
-                                    <span key={idx} className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs">
-                                      {role}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="flex justify-end gap-2 pt-4 border-t">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setTokenInspectorDialog(false);
-                setTokenData(null);
-                setSelectedUsername('');
-                setUserPassword('');
-              }}
-            >
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TokenInspectorDialog 
+        open={tokenInspectorDialog} 
+        onOpenChange={setTokenInspectorDialog}
+        cluster={cluster}
+      />
     </div>
   );
 }

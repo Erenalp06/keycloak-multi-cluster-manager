@@ -229,6 +229,80 @@ func (c *Client) GetUsers(baseURL, realm, accessToken string, max int) ([]map[st
 	return users, nil
 }
 
+// SearchUsers searches for users matching the query
+func (c *Client) SearchUsers(baseURL, realm, accessToken, query string) ([]map[string]interface{}, error) {
+	// Keycloak supports search parameter for users
+	url := fmt.Sprintf("%s/admin/realms/%s/users?search=%s", baseURL, realm, query)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to search users: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var users []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return nil, err
+	}
+	
+	return users, nil
+}
+
+// SearchClients searches for clients matching the query
+func (c *Client) SearchClients(baseURL, realm, accessToken, query string) ([]map[string]interface{}, error) {
+	// Get all clients and filter by clientId
+	clients, err := c.getClients(baseURL, realm, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	
+	queryLower := strings.ToLower(query)
+	var results []map[string]interface{}
+	for _, client := range clients {
+		clientId, _ := client["clientId"].(string)
+		name, _ := client["name"].(string)
+		
+		if strings.Contains(strings.ToLower(clientId), queryLower) || 
+		   (name != "" && strings.Contains(strings.ToLower(name), queryLower)) {
+			results = append(results, client)
+		}
+	}
+	
+	return results, nil
+}
+
+// SearchRoles searches for roles matching the query
+func (c *Client) SearchRoles(baseURL, realm, accessToken, query string) ([]domain.Role, error) {
+	// Get all roles and filter by name
+	roles, err := c.GetRoles(baseURL, realm, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	
+	queryLower := strings.ToLower(query)
+	var results []domain.Role
+	for _, role := range roles {
+		if strings.Contains(strings.ToLower(role.Name), queryLower) {
+			results = append(results, role)
+		}
+	}
+	
+	return results, nil
+}
+
 func (c *Client) GetGroups(baseURL, realm, accessToken string, max int) ([]map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/admin/realms/%s/groups", baseURL, realm)
 	if max > 0 {
@@ -308,6 +382,42 @@ func (c *Client) GetClientDetails(baseURL, realm, accessToken string) ([]domain.
 	}
 	
 	return clientDetails, nil
+}
+
+// GetClientSecret gets the client secret for a specific client
+func (c *Client) GetClientSecret(baseURL, realm, accessToken, clientID string) (string, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/client-secret", baseURL, realm, clientID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to get client secret: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var secretResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&secretResp); err != nil {
+		return "", err
+	}
+	
+	secret, ok := secretResp["value"].(string)
+	if !ok {
+		return "", fmt.Errorf("client secret not found in response")
+	}
+	
+	return secret, nil
 }
 
 func (c *Client) getClientScopes(baseURL, realm, accessToken, clientID, scopeType string) ([]string, error) {
@@ -990,6 +1100,43 @@ func (c *Client) GetUserToken(baseURL, realm, username, password, clientID strin
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to get user token: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return nil, err
+	}
+	
+	return &tokenResp, nil
+}
+
+// GetClientCredentialsToken gets access token using client credentials grant
+func (c *Client) GetClientCredentialsToken(baseURL, realm, clientID, clientSecret string) (*TokenResponse, error) {
+	if clientID == "" {
+		return nil, fmt.Errorf("client_id is required for client_credentials grant")
+	}
+	
+	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", baseURL, realm)
+	
+	data := fmt.Sprintf("grant_type=client_credentials&client_id=%s&client_secret=%s",
+		clientID, clientSecret)
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBufferString(data))
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get client credentials token: status %d, body: %s", resp.StatusCode, string(body))
 	}
 	
 	var tokenResp TokenResponse

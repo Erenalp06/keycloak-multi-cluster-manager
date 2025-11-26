@@ -194,6 +194,25 @@ func (h *ClusterHandler) GetClientDetails(c *fiber.Ctx) error {
 	return c.JSON(clients)
 }
 
+func (h *ClusterHandler) GetClientSecret(c *fiber.Ctx) error {
+	clusterID, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	clientID := c.Query("clientId")
+	if clientID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "clientId query parameter is required"})
+	}
+	
+	secret, err := h.service.GetClientSecret(clusterID, clientID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"secret": secret})
+}
+
 func (h *ClusterHandler) GetGroupDetails(c *fiber.Ctx) error {
 	id, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
@@ -243,20 +262,60 @@ func (h *ClusterHandler) GetUserToken(c *fiber.Ctx) error {
 	}
 	
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-		ClientID string `json:"client_id"`
+		GrantType    string `json:"grant_type"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
 	}
 	
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	
-	if req.Username == "" || req.Password == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Username and password are required"})
+	// Default to password grant if not specified
+	if req.GrantType == "" {
+		req.GrantType = "password"
 	}
 	
-	result, err := h.service.GetUserToken(id, req.Username, req.Password, req.ClientID)
+	if req.GrantType == "password" {
+		if req.Username == "" || req.Password == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Username and password are required for password grant"})
+		}
+		result, err := h.service.GetUserToken(id, req.Username, req.Password, req.ClientID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(result)
+	} else if req.GrantType == "client_credentials" {
+		if req.ClientID == "" || req.ClientSecret == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Client ID and client secret are required for client_credentials grant"})
+		}
+		result, err := h.service.GetClientCredentialsToken(id, req.ClientID, req.ClientSecret)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(result)
+	}
+	
+	return c.Status(400).JSON(fiber.Map{"error": "Unsupported grant_type. Supported types: password, client_credentials"})
+}
+
+func (h *ClusterHandler) Search(c *fiber.Ctx) error {
+	var req domain.SearchRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.Query == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Query is required"})
+	}
+	
+	if req.SearchType != "user" && req.SearchType != "client" && req.SearchType != "role" {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid search_type. Must be 'user', 'client', or 'role'"})
+	}
+	
+	result, err := h.service.Search(req)
 	if err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}

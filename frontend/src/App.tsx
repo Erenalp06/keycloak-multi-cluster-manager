@@ -12,6 +12,8 @@ import Roles from './pages/Roles';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import PermissionAnalyzer from './pages/PermissionAnalyzer';
+import TokenInspector from './pages/TokenInspector';
+import Tools from './pages/Tools';
 
 function App() {
   return (
@@ -33,6 +35,8 @@ function App() {
                       <Route path="/clusters/:id" element={<ClusterDetail />} />
                       <Route path="/clusters/:id/permission-analyzer" element={<PermissionAnalyzer />} />
                       <Route path="/diff" element={<RoleDiff />} />
+                      <Route path="/token-inspector" element={<TokenInspector />} />
+                      <Route path="/tools" element={<Tools />} />
                       <Route path="/users" element={<Users />} />
                       <Route path="/roles" element={<Roles />} />
                       <Route path="/settings" element={<Settings />} />

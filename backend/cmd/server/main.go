@@ -87,6 +87,7 @@ func main() {
 	// Cluster routes with permission checks
 	clusters := protected.Group("/clusters")
 	clusters.Get("/", middleware.PermissionMiddleware(appRoleService, "view_clusters"), clusterHandler.GetAll)
+	clusters.Post("/search", middleware.PermissionMiddleware(appRoleService, "view_clusters"), clusterHandler.Search)
 	clusters.Get("/:id", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetByID)
 	clusters.Get("/:id/health", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.HealthCheck)
 	clusters.Get("/:id/metrics", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetMetrics)
@@ -96,6 +97,7 @@ func main() {
 	clusters.Post("/:id/user-token", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetUserToken)
 	clusters.Get("/:id/clients", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetClients)
 	clusters.Get("/:id/clients/details", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetClientDetails)
+	clusters.Get("/:id/clients/secret", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetClientSecret)
 	clusters.Get("/:id/users", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetUsers)
 	clusters.Get("/:id/users/details", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetUserDetails)
 	clusters.Get("/:id/groups", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), clusterHandler.GetGroups)

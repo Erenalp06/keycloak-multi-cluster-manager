@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Shield, Key, Lock, FileText, Users, Layers, ArrowLeft, RefreshCw, AlertCircle, User, Building2 } from 'lucide-react';
 import { clusterApi, roleApi, Cluster } from '@/services/api';
 import { Button } from '@/components/ui/button';
@@ -32,13 +32,15 @@ type EntityType = 'user' | 'role' | 'client';
 export default function PermissionAnalyzer() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<number | null>(id ? Number(id) : null);
-  const [entityType, setEntityType] = useState<EntityType>('role');
+  const [entityType, setEntityType] = useState<EntityType>((searchParams.get('entityType') as EntityType) || 'role');
   const [roles, setRoles] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
-  const [selectedEntity, setSelectedEntity] = useState<string>('');
+  const [selectedEntity, setSelectedEntity] = useState<string>(searchParams.get('entityName') || '');
   const [rbacData, setRbacData] = useState<RBACAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingEntities, setLoadingEntities] = useState(false);
@@ -53,7 +55,19 @@ export default function PermissionAnalyzer() {
     if (clusterId) {
       loadEntities();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clusterId, entityType]);
+
+  // Auto-load analysis if entity is selected from URL
+  useEffect(() => {
+    if (clusterId && selectedEntity && entityType && !loadingEntities) {
+      const urlEntityName = searchParams.get('entityName');
+      if (urlEntityName && urlEntityName === selectedEntity) {
+        loadRBACAnalysis();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusterId, selectedEntity, entityType, loadingEntities]);
 
   const loadClusters = async () => {
     try {
@@ -70,29 +84,35 @@ export default function PermissionAnalyzer() {
   const loadEntities = async () => {
     if (!clusterId) return;
     setLoadingEntities(true);
-    setSelectedEntity('');
+    // Don't reset selectedEntity if it's from URL params
+    const urlEntityName = searchParams.get('entityName');
+    if (!urlEntityName) {
+      setSelectedEntity('');
+    }
     setRbacData(null);
     try {
       switch (entityType) {
         case 'role':
           const rolesData = await roleApi.getRoles(clusterId);
           setRoles(rolesData || []);
-          if (rolesData && rolesData.length > 0) {
+          if (!urlEntityName && rolesData && rolesData.length > 0) {
             setSelectedEntity(rolesData[0].name);
           }
           break;
         case 'user':
           const usersData = await clusterApi.getUsers(clusterId, 100);
           setUsers(usersData || []);
-          if (usersData && usersData.length > 0) {
+          if (!urlEntityName && usersData && usersData.length > 0) {
             setSelectedEntity(usersData[0].username || usersData[0].id);
           }
           break;
         case 'client':
           const clientsData = await clusterApi.getClients(clusterId);
           setClients(clientsData || []);
-          if (clientsData && clientsData.length > 0) {
-            setSelectedEntity(clientsData[0].id);
+          if (!urlEntityName && clientsData && clientsData.length > 0) {
+            // Try to match by clientId first, then by id
+            const firstClient = clientsData[0];
+            setSelectedEntity(firstClient.clientId || firstClient.id || firstClient.name || '');
           }
           break;
       }

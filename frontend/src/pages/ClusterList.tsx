@@ -7,8 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Trash2, Plus, Activity, Eye, Shield, Users, Key, Building2, Network, Server, X, CheckCircle2, AlertCircle, Tag, Grid3x3, List, Filter, Edit } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Trash2, Plus, Activity, Eye, Shield, Users, Key, Building2, Network, Server, X, CheckCircle2, AlertCircle, Tag, Grid3x3, List, Filter, Edit, ChevronDown, ChevronRight, Folder, Search } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import TokenInspectorDialog from '@/components/TokenInspectorDialog';
+import MultiClusterSearch from '@/components/MultiClusterSearch';
 
 type ViewMode = 'grid' | 'list';
 type HealthFilter = 'all' | 'online' | 'offline';
@@ -43,6 +46,12 @@ export default function ClusterList() {
     currentGroup: '',
   });
   const [groupName, setGroupName] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [tokenInspectorDialog, setTokenInspectorDialog] = useState<{ open: boolean; clusterId: number | null }>({
+    open: false,
+    clusterId: null,
+  });
+  
 
   const [formData, setFormData] = useState({
     name: '',
@@ -70,6 +79,33 @@ export default function ClusterList() {
   useEffect(() => {
     loadClusters();
   }, []);
+
+  // Auto-expand all groups when clusters are loaded
+  useEffect(() => {
+    if (clusters.length > 0) {
+      const { nestedGroups, standaloneGroups } = groupedClusters();
+      const allGroupKeys = new Set<string>();
+      
+      // Add instance group keys
+      Object.keys(nestedGroups).forEach(instanceName => {
+        allGroupKeys.add(instanceName);
+        // Also expand sub-groups within instances
+        Object.keys(nestedGroups[instanceName].groups).forEach(groupName => {
+          allGroupKeys.add(`${instanceName}:${groupName}`);
+        });
+      });
+      
+      // Add standalone group keys
+      Object.keys(standaloneGroups).forEach(groupName => {
+        allGroupKeys.add(groupName);
+      });
+      
+      if (allGroupKeys.size > 0) {
+        setExpandedGroups(allGroupKeys);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusters]);
 
   useEffect(() => {
     // Load metrics and check health for all clusters
@@ -161,11 +197,28 @@ export default function ClusterList() {
     if (!editDialog.clusterId) return;
     
     try {
-      const updateData = {
-        ...editFormData,
-        group_name: editFormData.group_name.trim() === '' ? undefined : editFormData.group_name.trim(),
-        metrics_endpoint: editFormData.metrics_endpoint.trim() === '' ? undefined : editFormData.metrics_endpoint.trim(),
+      const updateData: any = {
+        name: editFormData.name,
+        base_url: editFormData.base_url,
+        realm: editFormData.realm,
+        username: editFormData.username,
+        password: editFormData.password,
       };
+      
+      // Handle group_name: send null if empty, otherwise send the trimmed value
+      if (editFormData.group_name.trim() === '') {
+        updateData.group_name = null;
+      } else {
+        updateData.group_name = editFormData.group_name.trim();
+      }
+      
+      // Handle metrics_endpoint: send null if empty, otherwise send the trimmed value
+      if (editFormData.metrics_endpoint.trim() === '') {
+        updateData.metrics_endpoint = null;
+      } else {
+        updateData.metrics_endpoint = editFormData.metrics_endpoint.trim();
+      }
+      
       await clusterApi.update(editDialog.clusterId, updateData);
       setEditDialog({ open: false, clusterId: null });
       setEditFormData({
@@ -353,6 +406,100 @@ export default function ClusterList() {
     });
   };
 
+  // Group clusters by base_url (Keycloak instance) first, then by group_name (nested)
+  const groupedClusters = () => {
+    const filtered = getFilteredClusters();
+    
+    // Helper to get instance name from base_url (hostname + port)
+    const getInstanceName = (baseUrl: string): string => {
+      try {
+        const url = new URL(baseUrl);
+        // Include both hostname and port to distinguish different instances on same machine
+        if (url.port) {
+          return `${url.hostname}:${url.port}`;
+        }
+        // If no port specified, use default ports based on protocol
+        const defaultPort = url.protocol === 'https:' ? '443' : '80';
+        return `${url.hostname}:${defaultPort}`;
+      } catch {
+        return baseUrl;
+      }
+    };
+
+    // First pass: Group ALL clusters by base_url (instance) - PRIMARY grouping
+    const instanceGroups: Record<string, Cluster[]> = {};
+    filtered.forEach((cluster) => {
+      const instanceName = getInstanceName(cluster.base_url);
+      if (!instanceGroups[instanceName]) {
+        instanceGroups[instanceName] = [];
+      }
+      instanceGroups[instanceName].push(cluster);
+    });
+
+    // Second pass: For each instance, group by group_name (SECONDARY grouping)
+    // Structure: { instanceName: { groups: Record<string, Cluster[]>, ungrouped: Cluster[] } }
+    const nestedGroups: Record<string, { groups: Record<string, Cluster[]>, ungrouped: Cluster[] }> = {};
+    const standaloneGroups: Record<string, Cluster[]> = {}; // Manual groups spanning multiple instances
+    const ungrouped: Cluster[] = [];
+
+    Object.entries(instanceGroups).forEach(([instanceName, clusterList]) => {
+      if (clusterList.length > 1) {
+        // Multiple realms on same instance - create nested structure
+        nestedGroups[instanceName] = { groups: {}, ungrouped: [] };
+        
+        // Group by group_name within this instance
+        clusterList.forEach((cluster) => {
+          if (cluster.group_name && cluster.group_name.trim() !== '') {
+            if (!nestedGroups[instanceName].groups[cluster.group_name]) {
+              nestedGroups[instanceName].groups[cluster.group_name] = [];
+            }
+            nestedGroups[instanceName].groups[cluster.group_name].push(cluster);
+          } else {
+            nestedGroups[instanceName].ungrouped.push(cluster);
+          }
+        });
+      } else {
+        // Single realm on instance
+        const cluster = clusterList[0];
+        if (cluster.group_name && cluster.group_name.trim() !== '') {
+          // Has manual group - check if other instances also have this group_name
+          if (!standaloneGroups[cluster.group_name]) {
+            standaloneGroups[cluster.group_name] = [];
+          }
+          standaloneGroups[cluster.group_name].push(cluster);
+        } else {
+          // No manual group - leave ungrouped
+          ungrouped.push(cluster);
+        }
+      }
+    });
+
+    // Filter standalone groups - only keep those with multiple clusters from different instances
+    const finalStandaloneGroups: Record<string, Cluster[]> = {};
+    Object.entries(standaloneGroups).forEach(([groupName, clusterList]) => {
+      if (clusterList.length > 1) {
+        finalStandaloneGroups[groupName] = clusterList;
+      } else {
+        // Single cluster with group_name but alone - add to ungrouped
+        ungrouped.push(clusterList[0]);
+      }
+    });
+
+    return { nestedGroups, standaloneGroups: finalStandaloneGroups, ungrouped };
+  };
+
+  const toggleGroup = (groupName: string) => {
+    setExpandedGroups((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(groupName)) {
+        newSet.delete(groupName);
+      } else {
+        newSet.add(groupName);
+      }
+      return newSet;
+    });
+  };
+
   const getClusterMetrics = (clusterId: number) => {
     if (metrics[clusterId]) {
       return metrics[clusterId];
@@ -442,13 +589,18 @@ export default function ClusterList() {
 
   return (
     <div className="p-6">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <div>
+      {/* Header with Search */}
+      <div className="flex items-center mb-6 gap-4">
+        <div className="flex-shrink-0">
           <h1 className="text-xl font-semibold text-gray-900 mb-1">Clusters</h1>
           <p className="text-sm text-gray-600">Manage your Keycloak environments</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          {/* Multi-Cluster Search - Takes remaining space */}
+          <MultiClusterSearch clusters={clusters} />
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          
           {/* View Mode Toggle */}
           <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
             <Button
@@ -654,16 +806,17 @@ export default function ClusterList() {
         }
 
         if (viewMode === 'grid') {
-          return (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredClusters.map((cluster: Cluster) => {
+          const { nestedGroups, standaloneGroups, ungrouped } = groupedClusters();
+          const sortedInstanceNames = Object.keys(nestedGroups).sort();
+          const sortedStandaloneNames = Object.keys(standaloneGroups).sort();
+          
+          // Helper function to render a cluster card
+          const renderClusterCard = (cluster: Cluster) => {
                 const clusterMetrics = getClusterMetrics(cluster.id);
                 const health = healthStatuses[cluster.id];
                 const isHealthy = health?.status === 'healthy';
                 const isError = health?.status === 'error' || health?.status === 'unhealthy';
-                const isUnknown = !health;
                 
-                // Determine card styling based on health status
                 const cardBorderClass = isHealthy 
                   ? 'border-2 border-green-400 shadow-green-100' 
                   : isError 
@@ -681,7 +834,6 @@ export default function ClusterList() {
                 key={cluster.id} 
                 className={`${cardBorderClass} ${cardBgClass} shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden`}
               >
-                {/* Status indicator bar at top */}
                 <div className={`absolute top-0 left-0 right-0 h-1 ${
                   isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
                 }`} />
@@ -729,19 +881,10 @@ export default function ClusterList() {
                           Realm: {cluster.realm}
                         </CardDescription>
                       )}
-                      {cluster.group_name && (
-                        <div className="mt-1.5">
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
-                            <Tag className="h-3 w-3" />
-                            {cluster.group_name}
-                          </span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  {/* Health Status Banner */}
                   {health && (
                     <div className={`mb-4 p-3 rounded-lg border ${
                       isHealthy 
@@ -771,7 +914,6 @@ export default function ClusterList() {
                     </div>
                   )}
                   
-                  {/* Mini Metrics */}
                   <div className={`grid grid-cols-4 gap-2 mb-3 pb-3 border-b ${
                     isHealthy ? 'border-green-100' : isError ? 'border-red-100' : 'border-gray-100'
                   }`}>
@@ -845,7 +987,6 @@ export default function ClusterList() {
                     </div>
                   </div>
                   
-                  {/* Info */}
                   <div className="space-y-1.5 mb-3">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-gray-500">Realm:</span>
@@ -859,21 +1000,8 @@ export default function ClusterList() {
                         </span>
                       </div>
                     )}
-                    {loadingVersions[cluster.id] && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">Version:</span>
-                        <span className="text-gray-400">Loading...</span>
                       </div>
-                    )}
-                    {cluster.group_name && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-500">Group:</span>
-                        <span className="font-medium text-blue-600">{cluster.group_name}</span>
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Prometheus Metrics Indicator - Only show if configured */}
                   {cluster.metrics_endpoint && (
                     <div className="mt-2 pt-2 border-t border-gray-200">
                       {prometheusMetrics[cluster.id] && prometheusMetrics[cluster.id].available ? (
@@ -893,12 +1021,11 @@ export default function ClusterList() {
                         <div className="flex items-center gap-1.5 text-xs text-gray-500">
                           <AlertCircle className="h-3 w-3" />
                           <span>Metrics unavailable</span>
-                        </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
+                  </div>
                   )}
 
-                  {/* Actions */}
                   <div className="flex gap-1.5">
                     <Button
                       size="sm"
@@ -914,381 +1041,840 @@ export default function ClusterList() {
                       <Eye className="h-3.5 w-3.5 mr-1.5" />
                       View Details
                     </Button>
-                    {isAdmin && (
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-xs h-8 px-2 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                              onClick={() => handleEdit(cluster)}
-                              title="Edit Cluster"
-                            >
-                              <Edit className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p className="font-medium">Edit Cluster</p>
-                            <p className="text-xs mt-1 opacity-90">
-                              Edit cluster details
-                            </p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    )}
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
+                            onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
+                          >
+                            <Key className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p className="font-medium">Token Inspector</p>
+                          <p className="text-xs mt-1 opacity-90">
+                            Get and inspect access token for a Keycloak user
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    {isAdmin && (
                           <Button
                             variant="outline"
                             size="sm"
                             className="text-xs h-8 px-2 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                            onClick={() => handleSetGroup(cluster.id, cluster.group_name || undefined)}
-                            title="Set Group"
+                        onClick={() => handleEdit(cluster)}
                           >
-                            <Tag className="h-3.5 w-3.5" />
+                        <Edit className="h-3.5 w-3.5" />
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="font-medium">Set Group</p>
-                          <p className="text-xs mt-1 opacity-90">
-                            Assign this cluster to a group (dev, prod, test, etc.)
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
+                    )}
+                    {isAdmin && (
                           <Button
                             variant="outline"
                             size="sm"
-                            className={`text-xs h-8 px-3 ${
-                              checkingHealth[cluster.id] 
-                                ? 'opacity-50 cursor-not-allowed' 
-                                : healthStatuses[cluster.id]?.status === 'healthy'
-                                ? 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
-                                : healthStatuses[cluster.id]?.status === 'error'
-                                ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
-                                : 'hover:bg-gray-50'
-                            }`}
-                            onClick={() => handleHealthCheck(cluster.id)}
-                            disabled={checkingHealth[cluster.id]}
-                          >
-                            <Activity className={`h-3.5 w-3.5 ${checkingHealth[cluster.id] ? 'animate-spin' : ''}`} />
+                        className="text-xs h-7 px-2 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                        onClick={() => handleDelete(cluster.id)}
+                      >
+                        <Trash2 className="h-3 w-3" />
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="font-medium">Health Check</p>
-                          <p className="text-xs mt-1 opacity-90">
-                            {checkingHealth[cluster.id] 
-                              ? 'Checking cluster health...' 
-                              : 'Click to verify if the Keycloak realm is accessible and responding'
-                            }
-                          </p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    {isAdmin && (
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          };
+          
+          return (
+            <div className="space-y-6">
+              {/* Nested instance groups (base_url -> group_name) */}
+              {sortedInstanceNames.map((instanceName) => {
+                const instanceData = nestedGroups[instanceName];
+                const isInstanceExpanded = expandedGroups.has(instanceName);
+                const totalClusters = Object.values(instanceData.groups).flat().length + instanceData.ungrouped.length;
+                const sortedSubGroupNames = Object.keys(instanceData.groups).sort();
+                
+                return (
+                  <div key={instanceName} className="space-y-3">
+                    <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                      <button
+                        onClick={() => toggleGroup(instanceName)}
+                        className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+                      >
+                        <Server className="h-4 w-4 text-blue-500" />
+                        <span>{instanceName}</span>
+                        <span className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
+                          Instance
+                        </span>
+                        <span className="text-xs text-gray-500">({totalClusters})</span>
+                        {isInstanceExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-gray-400" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        )}
+                      </button>
+                    </div>
+                    {isInstanceExpanded && (
+                      <div className="pl-4 border-l-2 border-gray-200 space-y-4">
+                        {/* Sub-groups by group_name */}
+                        {sortedSubGroupNames.map((groupName) => {
+                          const subGroupClusters = instanceData.groups[groupName];
+                          const subGroupKey = `${instanceName}:${groupName}`;
+                          const isSubGroupExpanded = expandedGroups.has(subGroupKey);
+                          
+                          return (
+                            <div key={subGroupKey} className="space-y-3">
+                              <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                                <button
+                                  onClick={() => toggleGroup(subGroupKey)}
+                                  className="flex items-center gap-2 text-xs font-semibold text-gray-600 hover:text-gray-800 transition-colors"
+                                >
+                                  <Folder className="h-3.5 w-3.5 text-gray-400" />
+                                  <span>{groupName}</span>
+                                  <span className="text-xs text-gray-500">({subGroupClusters.length})</span>
+                                  {isSubGroupExpanded ? (
+                                    <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
+                                  )}
+                                </button>
+                              </div>
+                              {isSubGroupExpanded && (
+                                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
+                                  {subGroupClusters.map((cluster: Cluster) => renderClusterCard(cluster))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        
+                        {/* Ungrouped clusters within instance */}
+                        {instanceData.ungrouped.length > 0 && (
+                          <div className="space-y-3">
+                            <div className="text-xs font-semibold text-gray-500 pb-2 border-b border-gray-200">
+                              Other ({instanceData.ungrouped.length})
+                            </div>
+                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
+                              {instanceData.ungrouped.map((cluster: Cluster) => renderClusterCard(cluster))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
+              {/* Standalone groups (manual groups spanning multiple instances) */}
+              {sortedStandaloneNames.map((groupName) => {
+                const groupClusters = standaloneGroups[groupName];
+                const isGroupExpanded = expandedGroups.has(groupName);
+                
+                return (
+                  <div key={groupName} className="space-y-3">
+                    <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                      <button
+                        onClick={() => toggleGroup(groupName)}
+                        className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+                      >
+                        <Folder className="h-4 w-4 text-gray-500" />
+                        <span>{groupName}</span>
+                        <span className="text-xs text-gray-500">({groupClusters.length})</span>
+                        {isGroupExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-gray-400" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-gray-400" />
+                        )}
+                      </button>
+                    </div>
+                    {isGroupExpanded && (
+                      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
+                        {groupClusters.map((cluster: Cluster) => renderClusterCard(cluster))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
+              {/* Ungrouped clusters */}
+              {ungrouped.length > 0 && (
+                <div className="space-y-3">
+                  <div className="pb-2 border-b border-gray-200">
+                    <div className="text-sm font-semibold text-gray-700">Other Clusters</div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    {ungrouped.map((cluster: Cluster) => renderClusterCard(cluster))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        // List View - Similar nested structure
+        const { nestedGroups: listNestedGroups, standaloneGroups: listStandaloneGroups, ungrouped: listUngrouped } = groupedClusters();
+        const sortedListInstanceNames = Object.keys(listNestedGroups).sort();
+        const sortedListStandaloneNames = Object.keys(listStandaloneGroups).sort();
+        
+        return (
+          <div className="space-y-6">
+            {/* Nested instance groups */}
+            {sortedListInstanceNames.map((instanceName) => {
+              const instanceData = listNestedGroups[instanceName];
+              const isInstanceExpanded = expandedGroups.has(instanceName);
+              const totalClusters = Object.values(instanceData.groups).flat().length + instanceData.ungrouped.length;
+              const sortedSubGroupNames = Object.keys(instanceData.groups).sort();
+              
+              return (
+                <div key={instanceName} className="space-y-3">
+                  <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                    <button
+                      onClick={() => toggleGroup(instanceName)}
+                      className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+                    >
+                      <Server className="h-4 w-4 text-blue-500" />
+                      <span>{instanceName}</span>
+                      <span className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
+                        Instance
+                      </span>
+                      <span className="text-xs text-gray-500">({totalClusters})</span>
+                      {isInstanceExpanded ? (
+                        <ChevronDown className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
+                  {isInstanceExpanded && (
+                    <div className="pl-4 border-l-2 border-gray-200 space-y-4">
+                      {/* Sub-groups by group_name */}
+                      {sortedSubGroupNames.map((groupName) => {
+                        const subGroupClusters = instanceData.groups[groupName];
+                        const subGroupKey = `${instanceName}:${groupName}`;
+                        const isSubGroupExpanded = expandedGroups.has(subGroupKey);
+                        
+                        return (
+                          <div key={subGroupKey} className="space-y-3">
+                            <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                              <button
+                                onClick={() => toggleGroup(subGroupKey)}
+                                className="flex items-center gap-2 text-xs font-semibold text-gray-600 hover:text-gray-800 transition-colors"
+                              >
+                                <Folder className="h-3.5 w-3.5 text-gray-400" />
+                                <span>{groupName}</span>
+                                <span className="text-xs text-gray-500">({subGroupClusters.length})</span>
+                                {isSubGroupExpanded ? (
+                                  <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+                                ) : (
+                                  <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
+                                )}
+                              </button>
+                            </div>
+                            {isSubGroupExpanded && (
+                              <div className="space-y-3 pl-4 border-l-2 border-gray-200">
+                                {subGroupClusters.map((cluster: Cluster) => {
+                                  const clusterMetrics = getClusterMetrics(cluster.id);
+                                  const health = healthStatuses[cluster.id];
+                                  const isHealthy = health?.status === 'healthy';
+                                  const isError = health?.status === 'error' || health?.status === 'unhealthy';
+                                  
+                                  return (
+                                    <Card 
+                                      key={cluster.id} 
+                                      className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
+                                        isHealthy 
+                                          ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
+                                          : isError 
+                                          ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
+                                          : 'border-gray-300 bg-white'
+                                      }`}
+                                    >
+                                      <div className={`absolute top-0 left-0 bottom-0 w-1 ${
+                                        isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
+                                      }`} />
+                                      
+                                      <CardContent className="p-4 pl-6">
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-4 flex-1 min-w-0">
+                                            <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
+                                              isHealthy 
+                                                ? 'bg-green-500' 
+                                                : isError 
+                                                ? 'bg-red-500' 
+                                                : 'bg-gray-400'
+                                            }`}>
+                                              <Shield className="h-6 w-6 text-white" />
+                                            </div>
+                                            
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex items-center gap-3 mb-1">
+                                                <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
+                                                {health && (
+                                                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                    isHealthy 
+                                                      ? 'bg-green-100 text-green-800' 
+                                                      : 'bg-red-100 text-red-800'
+                                                  }`}>
+                                                    {isHealthy ? (
+                                                      <>
+                                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                                        <span>Online</span>
+                                                      </>
+                                                    ) : (
+                                                      <>
+                                                        <AlertCircle className="h-3.5 w-3.5" />
+                                                        <span>Offline</span>
+                                                      </>
+                                                    )}
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="flex items-center gap-4 text-sm text-gray-600">
+                                                <div className="flex items-center gap-1.5">
+                                                  <Server className="h-4 w-4" />
+                                                  <span className="truncate">{cluster.base_url}</span>
+                                                </div>
+                                                {cluster.realm && (
+                                                  <div className="flex items-center gap-1.5">
+                                                    <Shield className="h-4 w-4" />
+                                                    <span>Realm: {cluster.realm}</span>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          
+                                          <div className="flex items-center gap-2">
+                                            <Button
+                                              size="sm"
+                                              className={`text-xs h-9 font-semibold transition-all ${
+                                                isHealthy 
+                                                  ? 'bg-green-600 hover:bg-green-700 text-white' 
+                                                  : isError
+                                                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                                                  : 'bg-[#4a5568] hover:bg-[#374151] text-white'
+                                              }`}
+                                              onClick={() => navigate(`/clusters/${cluster.id}`)}
+                                            >
+                                              <Eye className="h-3.5 w-3.5 mr-1.5" />
+                                              View
+                                            </Button>
+                                            <TooltipProvider>
+                                              <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                  <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
+                                                    onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
+                                                  >
+                                                    <Key className="h-3.5 w-3.5" />
+                                                  </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                  <p className="font-medium">Token Inspector</p>
+                                                  <p className="text-xs mt-1 opacity-90">
+                                                    Get and inspect access token for a Keycloak user
+                                                  </p>
+                                                </TooltipContent>
+                                              </Tooltip>
+                                            </TooltipProvider>
+                                            {isAdmin && (
                       <Button
                         variant="outline"
                         size="sm"
-                        className="text-xs h-7 px-2 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                                                className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                                                onClick={() => handleEdit(cluster)}
+                                              >
+                                                <Edit className="h-3.5 w-3.5 mr-1.5" />
+                                                Edit
+                                              </Button>
+                                            )}
+                                            {isAdmin && (
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
                         onClick={() => handleDelete(cluster.id)}
-                        title="Delete"
                       >
-                        <Trash2 className="h-3 w-3" />
+                                                <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     )}
+                                          </div>
                   </div>
                 </CardContent>
               </Card>
                 );
               })}
+                              </div>
+                            )}
             </div>
           );
-        }
-
-        // List View
-        return (
-          <div className="space-y-3">
-            {filteredClusters.map((cluster: Cluster) => {
-              const clusterMetrics = getClusterMetrics(cluster.id);
-              const health = healthStatuses[cluster.id];
-              const isHealthy = health?.status === 'healthy';
-              const isError = health?.status === 'error' || health?.status === 'unhealthy';
-              
-              return (
-                <Card 
-                  key={cluster.id} 
-                  className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
-                    isHealthy 
-                      ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
-                      : isError 
-                      ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
-                      : 'border-gray-300 bg-white'
-                  }`}
-                >
-                  {/* Status indicator bar at left */}
-                  <div className={`absolute top-0 left-0 bottom-0 w-1 ${
-                    isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
-                  }`} />
-                  
-                  <CardContent className="p-4 pl-6">
-                    <div className="flex items-center justify-between">
-                      {/* Left: Cluster Info */}
-                      <div className="flex items-center gap-4 flex-1 min-w-0">
-                        {/* Icon */}
-                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
-                          isHealthy 
-                            ? 'bg-green-500' 
-                            : isError 
-                            ? 'bg-red-500' 
-                            : 'bg-gray-400'
-                        }`}>
-                          <Shield className="h-6 w-6 text-white" />
-                        </div>
-                        
-                        {/* Cluster Details */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-3 mb-1">
-                            <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
-                            {health && (
-                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
-                                isHealthy 
-                                  ? 'bg-green-100 text-green-800' 
-                                  : 'bg-red-100 text-red-800'
-                              }`}>
-                                {isHealthy ? (
-                                  <>
-                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                    <span>Online</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <AlertCircle className="h-3.5 w-3.5" />
-                                    <span>Offline</span>
-                                  </>
-                                )}
-                              </span>
-                            )}
-                            {cluster.group_name && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
-                                <Tag className="h-3 w-3" />
-                                {cluster.group_name}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-4 text-sm text-gray-600">
-                            <div className="flex items-center gap-1.5">
-                              <Server className="h-4 w-4" />
-                              <span className="truncate">{cluster.base_url}</span>
-                            </div>
-                            {cluster.realm && (
-                              <div className="flex items-center gap-1.5">
-                                <Shield className="h-4 w-4" />
-                                <span>Realm: {cluster.realm}</span>
-                              </div>
-                            )}
-                            {versions[cluster.id] && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded border border-blue-200 text-xs font-medium">
-                                  v{versions[cluster.id]}
-                                </span>
-                              </div>
-                            )}
-                            {loadingVersions[cluster.id] && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded border border-gray-300 text-xs">
-                                  Loading version...
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                          {health && !isHealthy && health.message && (
-                            <div className="mt-2 text-xs text-red-600 flex items-center gap-1.5">
-                              <AlertCircle className="h-3.5 w-3.5" />
-                              <span>{health.message}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      })}
                       
-                      {/* Center: Metrics */}
-                      <div className="flex items-center gap-6 px-6 border-l border-r border-gray-200 mx-4">
-                        <div 
-                          className="text-center cursor-pointer hover:bg-gray-50 rounded p-2 transition-colors"
-                          onClick={() => !loadingMetrics[cluster.id] && clusterMetrics.clients !== -1 && handleMetricClick('clients', cluster.id)}
-                        >
-                          <Building2 className="h-4 w-4 text-gray-600 mx-auto mb-1" />
-                          <div className="text-base font-bold text-gray-900">
-                            {loadingMetrics[cluster.id] ? (
-                              <span className="inline-block w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
-                            ) : clusterMetrics.clients === -1 ? (
-                              <span className="text-gray-400">-</span>
-                            ) : (
-                              clusterMetrics.clients.toLocaleString()
-                            )}
+                      {/* Ungrouped clusters within instance */}
+                      {instanceData.ungrouped.length > 0 && (
+                        <div className="space-y-3">
+                          <div className="text-xs font-semibold text-gray-500 pb-2 border-b border-gray-200">
+                            Other ({instanceData.ungrouped.length})
                           </div>
-                          <div className="text-xs text-gray-500 font-medium">Clients</div>
-                        </div>
-                        <div 
-                          className="text-center cursor-pointer hover:bg-gray-50 rounded p-2 transition-colors"
-                          onClick={() => !loadingMetrics[cluster.id] && clusterMetrics.roles !== -1 && handleMetricClick('roles', cluster.id)}
-                        >
-                          <Key className="h-4 w-4 text-gray-600 mx-auto mb-1" />
-                          <div className="text-base font-bold text-gray-900">
-                            {loadingMetrics[cluster.id] ? (
-                              <span className="inline-block w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
-                            ) : clusterMetrics.roles === -1 ? (
-                              <span className="text-gray-400">-</span>
-                            ) : (
-                              clusterMetrics.roles.toLocaleString()
-                            )}
+                          <div className="space-y-3 pl-4 border-l-2 border-gray-200">
+                            {instanceData.ungrouped.map((cluster: Cluster) => {
+                              const clusterMetrics = getClusterMetrics(cluster.id);
+                              const health = healthStatuses[cluster.id];
+                              const isHealthy = health?.status === 'healthy';
+                              const isError = health?.status === 'error' || health?.status === 'unhealthy';
+                              
+        return (
+                                <Card 
+                                  key={cluster.id} 
+                                  className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
+                                    isHealthy 
+                                      ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
+                                      : isError 
+                                      ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
+                                      : 'border-gray-300 bg-white'
+                                  }`}
+                                >
+                                  <div className={`absolute top-0 left-0 bottom-0 w-1 ${
+                                    isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
+                                  }`} />
+                                  
+                                  <CardContent className="p-4 pl-6">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-4 flex-1 min-w-0">
+                                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
+                                          isHealthy 
+                                            ? 'bg-green-500' 
+                                            : isError 
+                                            ? 'bg-red-500' 
+                                            : 'bg-gray-400'
+                                        }`}>
+                                          <Shield className="h-6 w-6 text-white" />
+                                        </div>
+                                        
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center gap-3 mb-1">
+                                            <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
+                                            {health && (
+                                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                isHealthy 
+                                                  ? 'bg-green-100 text-green-800' 
+                                                  : 'bg-red-100 text-red-800'
+                                              }`}>
+                                                {isHealthy ? (
+                                                  <>
+                                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                                    <span>Online</span>
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <AlertCircle className="h-3.5 w-3.5" />
+                                                    <span>Offline</span>
+                                                  </>
+                                                )}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-4 text-sm text-gray-600">
+                                            <div className="flex items-center gap-1.5">
+                                              <Server className="h-4 w-4" />
+                                              <span className="truncate">{cluster.base_url}</span>
+                                            </div>
+                                            {cluster.realm && (
+                                              <div className="flex items-center gap-1.5">
+                                                <Shield className="h-4 w-4" />
+                                                <span>Realm: {cluster.realm}</span>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="flex items-center gap-2">
+                                        <Button
+                                          size="sm"
+                                          className={`text-xs h-9 font-semibold transition-all ${
+                                            isHealthy 
+                                              ? 'bg-green-600 hover:bg-green-700 text-white' 
+                                              : isError
+                                              ? 'bg-red-600 hover:bg-red-700 text-white'
+                                              : 'bg-[#4a5568] hover:bg-[#374151] text-white'
+                                          }`}
+                                          onClick={() => navigate(`/clusters/${cluster.id}`)}
+                                        >
+                                          <Eye className="h-3.5 w-3.5 mr-1.5" />
+                                          View
+                                        </Button>
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
+                                                onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
+                                              >
+                                                <Key className="h-3.5 w-3.5" />
+                                              </Button>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                              <p className="font-medium">Token Inspector</p>
+                                              <p className="text-xs mt-1 opacity-90">
+                                                Get and inspect access token for a Keycloak user
+                                              </p>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
+                                        {isAdmin && (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                                            onClick={() => handleEdit(cluster)}
+                                          >
+                                            <Edit className="h-3.5 w-3.5 mr-1.5" />
+                                            Edit
+                                          </Button>
+                                        )}
+                                        {isAdmin && (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
+                                            onClick={() => handleDelete(cluster.id)}
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              );
+                            })}
                           </div>
-                          <div className="text-xs text-gray-500 font-medium">Roles</div>
-                        </div>
-                        <div 
-                          className="text-center cursor-pointer hover:bg-gray-50 rounded p-2 transition-colors"
-                          onClick={() => !loadingMetrics[cluster.id] && clusterMetrics.users !== -1 && handleMetricClick('users', cluster.id)}
-                        >
-                          <Users className="h-4 w-4 text-gray-600 mx-auto mb-1" />
-                          <div className="text-base font-bold text-gray-900">
-                            {loadingMetrics[cluster.id] ? (
-                              <span className="inline-block w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
-                            ) : clusterMetrics.users === -1 ? (
-                              <span className="text-gray-400">-</span>
-                            ) : (
-                              clusterMetrics.users.toLocaleString()
-                            )}
-                          </div>
-                          <div className="text-xs text-gray-500 font-medium">Users</div>
-                        </div>
-                        <div 
-                          className="text-center cursor-pointer hover:bg-gray-50 rounded p-2 transition-colors"
-                          onClick={() => !loadingMetrics[cluster.id] && clusterMetrics.groups !== -1 && handleMetricClick('groups', cluster.id)}
-                        >
-                          <Network className="h-4 w-4 text-gray-600 mx-auto mb-1" />
-                          <div className="text-base font-bold text-gray-900">
-                            {loadingMetrics[cluster.id] ? (
-                              <span className="inline-block w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
-                            ) : clusterMetrics.groups === -1 ? (
-                              <span className="text-gray-400">-</span>
-                            ) : (
-                              clusterMetrics.groups.toLocaleString()
-                            )}
-                          </div>
-                          <div className="text-xs text-gray-500 font-medium">Groups</div>
-                        </div>
-                      </div>
-
-                      {/* Prometheus Metrics Indicator - Only show if configured */}
-                      {cluster.metrics_endpoint && (
-                        <div className="px-6 border-t border-gray-200 pt-2 mt-2">
-                          {prometheusMetrics[cluster.id] && prometheusMetrics[cluster.id].available ? (
-                            <div className="flex items-center gap-1.5 text-xs text-gray-600">
-                              <Activity className="h-3 w-3 text-green-500" />
-                              <span className="font-medium">Prometheus: Active</span>
-                              {prometheusMetrics[cluster.id]?.active_sessions !== undefined && (
-                                <span className="text-gray-500">• {prometheusMetrics[cluster.id]?.active_sessions?.toFixed(0)} sessions</span>
-                              )}
-                            </div>
-                          ) : loadingPrometheusMetrics[cluster.id] ? (
-                            <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                              <span className="inline-block w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></span>
-                              Loading metrics...
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                              <AlertCircle className="h-3 w-3" />
-                              <span>Metrics unavailable</span>
-                            </div>
-                          )}
                         </div>
                       )}
-                      
-                      {/* Right: Actions */}
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          className={`text-xs h-9 font-semibold transition-all ${
-                            isHealthy 
-                              ? 'bg-green-600 hover:bg-green-700 text-white' 
-                              : isError
-                              ? 'bg-red-600 hover:bg-red-700 text-white'
-                              : 'bg-[#4a5568] hover:bg-[#374151] text-white'
-                          }`}
-                          onClick={() => navigate(`/clusters/${cluster.id}`)}
-                        >
-                          <Eye className="h-3.5 w-3.5 mr-1.5" />
-                          View
-                        </Button>
-                        {isAdmin && (
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                                  onClick={() => handleEdit(cluster)}
-                                >
-                                  <Edit className="h-3.5 w-3.5 mr-1.5" />
-                                  Edit
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p className="font-medium">Edit Cluster</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        )}
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className={`text-xs h-9 px-3 ${
-                                  checkingHealth[cluster.id] 
-                                    ? 'opacity-50 cursor-not-allowed' 
-                                    : isHealthy
-                                    ? 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
-                                    : isError
-                                    ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100'
-                                    : 'hover:bg-gray-50'
-                                }`}
-                                onClick={() => handleHealthCheck(cluster.id)}
-                                disabled={checkingHealth[cluster.id]}
-                              >
-                                <Activity className={`h-3.5 w-3.5 ${checkingHealth[cluster.id] ? 'animate-spin' : ''}`} />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p className="font-medium">Health Check</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        {isAdmin && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
-                            onClick={() => handleDelete(cluster.id)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
                     </div>
-                  </CardContent>
-                </Card>
+                  )}
+                </div>
               );
             })}
-          </div>
-        );
-      })()}
+            
+            {/* Standalone groups */}
+            {sortedListStandaloneNames.map((groupName) => {
+              const groupClusters = listStandaloneGroups[groupName];
+              const isGroupExpanded = expandedGroups.has(groupName);
+              
+              return (
+                <div key={groupName} className="space-y-3">
+                  <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                    <button
+                      onClick={() => toggleGroup(groupName)}
+                      className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+                    >
+                      <Folder className="h-4 w-4 text-gray-500" />
+                      <span>{groupName}</span>
+                      <span className="text-xs text-gray-500">({groupClusters.length})</span>
+                      {isGroupExpanded ? (
+                        <ChevronDown className="h-4 w-4 text-gray-400" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
+                  {isGroupExpanded && (
+                    <div className="space-y-3 pl-4 border-l-2 border-gray-200">
+                      {groupClusters.map((cluster: Cluster) => {
+                        const clusterMetrics = getClusterMetrics(cluster.id);
+                        const health = healthStatuses[cluster.id];
+                        const isHealthy = health?.status === 'healthy';
+                        const isError = health?.status === 'error' || health?.status === 'unhealthy';
+                        
+                        return (
+                          <Card 
+                            key={cluster.id} 
+                            className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
+                              isHealthy 
+                                ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
+                                : isError 
+                                ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
+                                : 'border-gray-300 bg-white'
+                            }`}
+                          >
+                            <div className={`absolute top-0 left-0 bottom-0 w-1 ${
+                              isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
+                            }`} />
+                            
+                            <CardContent className="p-4 pl-6">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-4 flex-1 min-w-0">
+                                  <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
+                                    isHealthy 
+                                      ? 'bg-green-500' 
+                                      : isError 
+                                      ? 'bg-red-500' 
+                                      : 'bg-gray-400'
+                                  }`}>
+                                    <Shield className="h-6 w-6 text-white" />
+                                  </div>
+                                  
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-3 mb-1">
+                                      <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
+                                      {health && (
+                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                                          isHealthy 
+                                            ? 'bg-green-100 text-green-800' 
+                                            : 'bg-red-100 text-red-800'
+                                        }`}>
+                                          {isHealthy ? (
+                                            <>
+                                              <CheckCircle2 className="h-3.5 w-3.5" />
+                                              <span>Online</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <AlertCircle className="h-3.5 w-3.5" />
+                                              <span>Offline</span>
+                                            </>
+                                          )}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-4 text-sm text-gray-600">
+                                      <div className="flex items-center gap-1.5">
+                                        <Server className="h-4 w-4" />
+                                        <span className="truncate">{cluster.base_url}</span>
+                                      </div>
+                                      {cluster.realm && (
+                                        <div className="flex items-center gap-1.5">
+                                          <Shield className="h-4 w-4" />
+                                          <span>Realm: {cluster.realm}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="sm"
+                                    className={`text-xs h-9 font-semibold transition-all ${
+                                      isHealthy 
+                                        ? 'bg-green-600 hover:bg-green-700 text-white' 
+                                        : isError
+                                        ? 'bg-red-600 hover:bg-red-700 text-white'
+                                        : 'bg-[#4a5568] hover:bg-[#374151] text-white'
+                                    }`}
+                                    onClick={() => navigate(`/clusters/${cluster.id}`)}
+                                  >
+                                    <Eye className="h-3.5 w-3.5 mr-1.5" />
+                                    View
+                                  </Button>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
+                                          onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
+                                        >
+                                          <Key className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p className="font-medium">Token Inspector</p>
+                                        <p className="text-xs mt-1 opacity-90">
+                                          Get and inspect access token for a Keycloak user
+                                        </p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  {isAdmin && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                                      onClick={() => handleEdit(cluster)}
+                                    >
+                                      <Edit className="h-3.5 w-3.5 mr-1.5" />
+                                      Edit
+                                    </Button>
+                                  )}
+                                  {isAdmin && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
+                                      onClick={() => handleDelete(cluster.id)}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            
+            {/* Ungrouped clusters */}
+            {listUngrouped.length > 0 && (
+          <div className="space-y-3">
+                <div className="pb-2 border-b border-gray-200">
+                  <div className="text-sm font-semibold text-gray-700">Other Clusters</div>
+                </div>
+                <div className="space-y-3">
+                  {listUngrouped.map((cluster: Cluster) => {
+                      const clusterMetrics = getClusterMetrics(cluster.id);
+                      const health = healthStatuses[cluster.id];
+                      const isHealthy = health?.status === 'healthy';
+                      const isError = health?.status === 'error' || health?.status === 'unhealthy';
+                      
+                      return (
+                        <Card 
+                          key={cluster.id} 
+                          className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
+                            isHealthy 
+                              ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
+                              : isError 
+                              ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
+                              : 'border-gray-300 bg-white'
+                          }`}
+                        >
+                          <div className={`absolute top-0 left-0 bottom-0 w-1 ${
+                            isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
+                          }`} />
+                          
+                          <CardContent className="p-4 pl-6">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-4 flex-1 min-w-0">
+                                <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
+                                  isHealthy 
+                                    ? 'bg-green-500' 
+                                    : isError 
+                                    ? 'bg-red-500' 
+                                    : 'bg-gray-400'
+                                }`}>
+                                  <Shield className="h-6 w-6 text-white" />
+                                </div>
+                                
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-3 mb-1">
+                                    <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
+                                    {health && (
+                                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                                        isHealthy 
+                                          ? 'bg-green-100 text-green-800' 
+                                          : 'bg-red-100 text-red-800'
+                                      }`}>
+                                        {isHealthy ? (
+                                          <>
+                                            <CheckCircle2 className="h-3.5 w-3.5" />
+                                            <span>Online</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <AlertCircle className="h-3.5 w-3.5" />
+                                            <span>Offline</span>
+                                          </>
+                                        )}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                                    <div className="flex items-center gap-1.5">
+                                      <Server className="h-4 w-4" />
+                                      <span className="truncate">{cluster.base_url}</span>
+                                    </div>
+                                    {cluster.realm && (
+                                      <div className="flex items-center gap-1.5">
+                                        <Shield className="h-4 w-4" />
+                                        <span>Realm: {cluster.realm}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              <div className="flex items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  className={`text-xs h-9 font-semibold transition-all ${
+                                    isHealthy 
+                                      ? 'bg-green-600 hover:bg-green-700 text-white' 
+                                      : isError
+                                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                                      : 'bg-[#4a5568] hover:bg-[#374151] text-white'
+                                  }`}
+                                  onClick={() => navigate(`/clusters/${cluster.id}`)}
+                                >
+                                  <Eye className="h-3.5 w-3.5 mr-1.5" />
+                                  View
+                                </Button>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
+                                        onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
+                                      >
+                                        <Key className="h-3.5 w-3.5" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p className="font-medium">Token Inspector</p>
+                                      <p className="text-xs mt-1 opacity-90">
+                                        Get and inspect access token for a Keycloak user
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                                {isAdmin && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                                    onClick={() => handleEdit(cluster)}
+                                  >
+                                    <Edit className="h-3.5 w-3.5 mr-1.5" />
+                                    Edit
+                                  </Button>
+                                )}
+                                {isAdmin && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
+                                    onClick={() => handleDelete(cluster.id)}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       {/* Detail Dialog */}
       <Dialog
@@ -1518,6 +2104,15 @@ export default function ClusterList() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Token Inspector Dialog */}
+      {tokenInspectorDialog.clusterId && (
+        <TokenInspectorDialog
+          open={tokenInspectorDialog.open}
+          onOpenChange={(open) => setTokenInspectorDialog({ open, clusterId: open ? tokenInspectorDialog.clusterId : null })}
+          cluster={clusters.find(c => c.id === tokenInspectorDialog.clusterId) || null}
+        />
+      )}
     </div>
   );
 }

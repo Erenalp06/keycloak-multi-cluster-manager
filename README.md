@@ -2,6 +2,9 @@
 
 **Version: 1.0.3**
 
+<img width="2554" height="1304" alt="image" src="https://github.com/user-attachments/assets/4ccd1955-00ca-4968-a08d-bb1c05ee4049" />
+
+
 Çoklu Keycloak ortamlarını (dev/test/prod) tek panelden yönetmek için bir MVP uygulaması.
 
 ## Özellikler

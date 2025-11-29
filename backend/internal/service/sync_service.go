@@ -40,22 +40,27 @@ func (s *SyncService) SyncRole(sourceClusterID, destinationClusterID int, roleNa
 	}
 	
 	// Get access tokens
-	sourceToken, err := s.keycloakClient.GetAccessToken(
+	sourceTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		sourceCluster.BaseURL,
 		sourceCluster.Realm,
-		sourceCluster.Username,
-		sourceCluster.Password,
+		sourceCluster.ClientID,
+		sourceCluster.ClientSecret,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get source token: %w", err)
 	}
+	sourceToken := sourceTokenResp.AccessToken
 	
-	destToken, err := s.keycloakClient.GetAccessToken(
+	destTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		destCluster.BaseURL,
 		destCluster.Realm,
-		destCluster.Username,
-		destCluster.Password,
+		destCluster.ClientID,
+		destCluster.ClientSecret,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination token: %w", err)
+	}
+	destToken := destTokenResp.AccessToken
 	if err != nil {
 		return fmt.Errorf("failed to get destination token: %w", err)
 	}
@@ -105,22 +110,27 @@ func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clie
 	}
 	
 	// Get access tokens
-	sourceToken, err := s.keycloakClient.GetAccessToken(
+	sourceTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		sourceCluster.BaseURL,
 		sourceCluster.Realm,
-		sourceCluster.Username,
-		sourceCluster.Password,
+		sourceCluster.ClientID,
+		sourceCluster.ClientSecret,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get source token: %w", err)
 	}
+	sourceToken := sourceTokenResp.AccessToken
 	
-	destToken, err := s.keycloakClient.GetAccessToken(
+	destTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		destCluster.BaseURL,
 		destCluster.Realm,
-		destCluster.Username,
-		destCluster.Password,
+		destCluster.ClientID,
+		destCluster.ClientSecret,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination token: %w", err)
+	}
+	destToken := destTokenResp.AccessToken
 	if err != nil {
 		return fmt.Errorf("failed to get destination token: %w", err)
 	}
@@ -170,22 +180,27 @@ func (s *SyncService) SyncGroup(sourceClusterID, destinationClusterID int, group
 	}
 	
 	// Get access tokens
-	sourceToken, err := s.keycloakClient.GetAccessToken(
+	sourceTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		sourceCluster.BaseURL,
 		sourceCluster.Realm,
-		sourceCluster.Username,
-		sourceCluster.Password,
+		sourceCluster.ClientID,
+		sourceCluster.ClientSecret,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get source token: %w", err)
 	}
+	sourceToken := sourceTokenResp.AccessToken
 	
-	destToken, err := s.keycloakClient.GetAccessToken(
+	destTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		destCluster.BaseURL,
 		destCluster.Realm,
-		destCluster.Username,
-		destCluster.Password,
+		destCluster.ClientID,
+		destCluster.ClientSecret,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination token: %w", err)
+	}
+	destToken := destTokenResp.AccessToken
 	if err != nil {
 		return fmt.Errorf("failed to get destination token: %w", err)
 	}
@@ -235,22 +250,27 @@ func (s *SyncService) SyncUser(sourceClusterID, destinationClusterID int, userna
 	}
 	
 	// Get access tokens
-	sourceToken, err := s.keycloakClient.GetAccessToken(
+	sourceTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		sourceCluster.BaseURL,
 		sourceCluster.Realm,
-		sourceCluster.Username,
-		sourceCluster.Password,
+		sourceCluster.ClientID,
+		sourceCluster.ClientSecret,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to get source token: %w", err)
 	}
+	sourceToken := sourceTokenResp.AccessToken
 	
-	destToken, err := s.keycloakClient.GetAccessToken(
+	destTokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		destCluster.BaseURL,
 		destCluster.Realm,
-		destCluster.Username,
-		destCluster.Password,
+		destCluster.ClientID,
+		destCluster.ClientSecret,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination token: %w", err)
+	}
+	destToken := destTokenResp.AccessToken
 	if err != nil {
 		return fmt.Errorf("failed to get destination token: %w", err)
 	}

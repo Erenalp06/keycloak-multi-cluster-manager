@@ -404,7 +404,7 @@ export default function Sidebar() {
                                                 {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
                                               </div>
                                               <div className="flex-1 min-w-0">
-                                                <div className="truncate text-xs">{cluster.name}</div>
+                                                <div className="truncate text-xs">{cluster.realm || 'master'}</div>
                                               </div>
                                             </Link>
                                           );
@@ -439,7 +439,7 @@ export default function Sidebar() {
                                           {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
                                         </div>
                                         <div className="flex-1 min-w-0">
-                                          <div className="truncate text-xs">{cluster.name}</div>
+                                          <div className="truncate text-xs">{cluster.realm || 'master'}</div>
                                         </div>
                                       </Link>
                                     );
@@ -497,7 +497,7 @@ export default function Sidebar() {
                                       {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                      <div className="truncate text-sm">{cluster.name}</div>
+                                      <div className="truncate text-sm">{cluster.realm || 'master'}</div>
                                     </div>
                                   </Link>
                                 );
@@ -531,7 +531,7 @@ export default function Sidebar() {
                               <div className="flex-shrink-0">
                                 {healthIndicator || <Circle className="h-2 w-2 fill-current opacity-50" />}
                               </div>
-                              <span className="truncate flex-1">{cluster.name}</span>
+                              <span className="truncate flex-1">{cluster.realm || 'master'}</span>
                             </Link>
                           );
                         })}
@@ -647,6 +647,25 @@ export default function Sidebar() {
             </div>
           )}
         </div>
+
+        {/* Keycloak Management */}
+        <Link
+          to="/keycloak-management"
+          className={cn(
+            "relative flex items-center gap-3 px-4 py-3 rounded text-base font-medium transition-colors group",
+            location.pathname === '/keycloak-management'
+              ? "bg-[rgba(0,102,204,0.1)] text-white"
+              : "text-gray-300 hover:bg-[#222b40] hover:text-white",
+            isCollapsed && "justify-center px-2"
+          )}
+          title={isCollapsed ? "Keycloak Management" : undefined}
+        >
+          {location.pathname === '/keycloak-management' && (
+            <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#0066cc] rounded-r" />
+          )}
+          <Wrench className="h-5 w-5 flex-shrink-0" />
+          {!isCollapsed && <span>Keycloak Management</span>}
+        </Link>
 
         {/* Settings */}
         <Link

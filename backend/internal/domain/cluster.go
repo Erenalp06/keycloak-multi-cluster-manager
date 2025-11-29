@@ -7,8 +7,8 @@ type Cluster struct {
 	Name            string    `json:"name"`
 	BaseURL         string    `json:"base_url"`
 	Realm           string    `json:"realm"`
-	Username        string    `json:"username"`
-	Password        string    `json:"password"`
+	ClientID        string    `json:"client_id"`        // Always "multi-manage"
+	ClientSecret    string    `json:"client_secret"`   // Service account secret
 	GroupName       *string   `json:"group_name,omitempty"`
 	MetricsEndpoint *string   `json:"metrics_endpoint,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -19,8 +19,9 @@ type CreateClusterRequest struct {
 	Name            string  `json:"name" validate:"required"`
 	BaseURL         string  `json:"base_url" validate:"required,url"`
 	Realm           string  `json:"realm"`
-	Username        string  `json:"username" validate:"required"`
-	Password        string  `json:"password" validate:"required"`
+	// Master realm admin credentials (only used during setup)
+	MasterUsername  string  `json:"master_username" validate:"required"`
+	MasterPassword  string  `json:"master_password" validate:"required"`
 	GroupName       *string `json:"group_name,omitempty"`
 	MetricsEndpoint *string `json:"metrics_endpoint,omitempty"`
 }
@@ -67,5 +68,16 @@ type PrometheusMetrics struct {
 	InfinispanMetrics   map[string]float64 `json:"infinispan_metrics,omitempty"`
 	
 	Error               string  `json:"error,omitempty"`
+}
+
+type DiscoverRealmsRequest struct {
+	BaseURL  string `json:"base_url" validate:"required,url"`
+	Username string `json:"username" validate:"required"`  // Master realm admin
+	Password string `json:"password" validate:"required"`  // Master realm admin
+}
+
+type RealmInfo struct {
+	Realm   string `json:"realm"`
+	Enabled bool   `json:"enabled"`
 }
 

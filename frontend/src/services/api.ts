@@ -1,4 +1,20 @@
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080/api';
+// Get API URL from environment or use current origin
+const getApiUrl = (): string => {
+  // If REACT_APP_API_URL is set, use it
+  if (process.env.REACT_APP_API_URL) {
+    return process.env.REACT_APP_API_URL;
+  }
+  
+  // Otherwise, use current window location (works for both HTTP and HTTPS)
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}/api`;
+  }
+  
+  // Fallback for SSR
+  return 'http://localhost:8080/api';
+};
+
+const API_URL = getApiUrl();
 
 // Helper function to get auth token from localStorage
 const getAuthToken = (): string | null => {
@@ -22,8 +38,8 @@ export interface Cluster {
   name: string;
   base_url: string;
   realm: string;
-  username: string;
-  password: string;
+  client_id: string;  // Always "multi-manage"
+  client_secret?: string;  // Not sent to frontend for security
   group_name?: string | null;
   metrics_endpoint?: string | null;
   created_at: string;
@@ -34,10 +50,21 @@ export interface CreateClusterRequest {
   name: string;
   base_url: string;
   realm?: string;
-  username: string;
-  password: string;
+  master_username: string;  // Master realm admin username
+  master_password: string;  // Master realm admin password
   group_name?: string;
   metrics_endpoint?: string;
+}
+
+export interface DiscoverRealmsRequest {
+  base_url: string;
+  username: string;
+  password: string;
+}
+
+export interface RealmInfo {
+  realm: string;
+  enabled: boolean;
 }
 
 export interface ClusterHealth {
@@ -298,6 +325,19 @@ export const clusterApi = {
     return response.json();
   },
 
+  discoverRealms: async (req: DiscoverRealmsRequest): Promise<RealmInfo[]> => {
+    const response = await fetch(`${API_URL}/clusters/discover`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to discover realms');
+    }
+    return response.json();
+  },
+
   create: async (cluster: CreateClusterRequest): Promise<Cluster> => {
     const response = await fetch(`${API_URL}/clusters`, {
       method: 'POST',
@@ -534,6 +574,135 @@ export const clusterApi = {
       throw new Error(error.error || 'Failed to fetch user details');
     }
     return response.json();
+  },
+
+  // Keycloak Management Operations
+  assignRealmRolesToUser: async (clusterId: number, userId: string, roleNames: string[]): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/users/assign-realm-roles`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ user_id: userId, role_names: roleNames }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to assign realm roles' }));
+      throw new Error(error.error || 'Failed to assign realm roles');
+    }
+  },
+
+  assignClientRolesToUser: async (clusterId: number, userId: string, clientRoles: Record<string, string[]>): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/users/assign-client-roles`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ user_id: userId, client_roles: clientRoles }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to assign client roles' }));
+      throw new Error(error.error || 'Failed to assign client roles');
+    }
+  },
+
+  addUserToGroup: async (clusterId: number, userId: string, groupId: string): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/users/add-to-group`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ user_id: userId, group_id: groupId }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to add user to group' }));
+      throw new Error(error.error || 'Failed to add user to group');
+    }
+  },
+
+  assignRealmRolesToGroup: async (clusterId: number, groupId: string, roleNames: string[]): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/groups/assign-realm-roles`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ group_id: groupId, role_names: roleNames }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to assign realm roles to group' }));
+      throw new Error(error.error || 'Failed to assign realm roles to group');
+    }
+  },
+
+  assignClientRolesToGroup: async (clusterId: number, groupId: string, clientRoles: Record<string, string[]>): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/groups/assign-client-roles`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ group_id: groupId, client_roles: clientRoles }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to assign client roles to group' }));
+      throw new Error(error.error || 'Failed to assign client roles to group');
+    }
+  },
+
+  createClient: async (clusterId: number, client: ClientDetail): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/clients/create`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(client),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to create client' }));
+      throw new Error(error.error || 'Failed to create client');
+    }
+  },
+
+  getClientRoles: async (clusterId: number, clientId: string): Promise<any[]> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/clients/roles?client_id=${encodeURIComponent(clientId)}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to fetch client roles' }));
+      throw new Error(error.error || 'Failed to fetch client roles');
+    }
+    return response.json();
+  },
+
+  createUser: async (clusterId: number, user: UserDetail): Promise<void> => {
+    const response = await fetch(
+      `${API_URL}/clusters/${clusterId}/users/create`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(user),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to create user' }));
+      throw new Error(error.error || 'Failed to create user');
+    }
+  },
+
+  createGroup: async (clusterId: number, group: GroupDetail): Promise<void> => {
+    const response = await fetch(
+      `${API_URL}/clusters/${clusterId}/groups/create`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(group),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to create group' }));
+      throw new Error(error.error || 'Failed to create group');
+    }
+  },
+
+  createRealmRole: async (clusterId: number, role: Role): Promise<void> => {
+    const response = await fetch(
+      `${API_URL}/clusters/${clusterId}/roles/create`,
+      {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(role),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to create realm role' }));
+      throw new Error(error.error || 'Failed to create realm role');
+    }
   },
 };
 

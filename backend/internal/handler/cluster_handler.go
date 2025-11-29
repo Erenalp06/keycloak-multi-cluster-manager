@@ -21,8 +21,8 @@ func (h *ClusterHandler) Create(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	
-	if req.Name == "" || req.BaseURL == "" || req.Username == "" || req.Password == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
+	if req.Name == "" || req.BaseURL == "" || req.MasterUsername == "" || req.MasterPassword == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields: name, base_url, master_username, master_password"})
 	}
 	
 	cluster, err := h.service.Create(req)
@@ -71,8 +71,8 @@ func (h *ClusterHandler) Update(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
 	}
 	
-	if req.Name == "" || req.BaseURL == "" || req.Username == "" || req.Password == "" {
-		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields"})
+	if req.Name == "" || req.BaseURL == "" || req.MasterUsername == "" || req.MasterPassword == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields: name, base_url, master_username, master_password"})
 	}
 	
 	cluster, err := h.service.Update(id, req)
@@ -374,5 +374,270 @@ func (h *ClusterHandler) GetPrometheusMetrics(c *fiber.Ctx) error {
 	}
 	
 	return c.JSON(metrics)
+}
+
+func (h *ClusterHandler) DiscoverRealms(c *fiber.Ctx) error {
+	var req domain.DiscoverRealmsRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.BaseURL == "" || req.Username == "" || req.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Missing required fields: base_url, username, password"})
+	}
+	
+	realms, err := h.service.DiscoverRealms(req)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(realms)
+}
+
+// AssignRealmRolesToUser assigns realm roles to a user
+func (h *ClusterHandler) AssignRealmRolesToUser(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		UserID    string   `json:"user_id"`
+		RoleNames []string `json:"role_names"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.UserID == "" || len(req.RoleNames) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "user_id and role_names are required"})
+	}
+	
+	if err := h.service.AssignRealmRolesToUser(id, req.UserID, req.RoleNames); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Realm roles assigned successfully"})
+}
+
+// AssignClientRolesToUser assigns client roles to a user
+func (h *ClusterHandler) AssignClientRolesToUser(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		UserID      string              `json:"user_id"`
+		ClientRoles map[string][]string `json:"client_roles"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.UserID == "" || len(req.ClientRoles) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "user_id and client_roles are required"})
+	}
+	
+	if err := h.service.AssignClientRolesToUser(id, req.UserID, req.ClientRoles); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Client roles assigned successfully"})
+}
+
+// AddUserToGroup adds a user to a group
+func (h *ClusterHandler) AddUserToGroup(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		UserID  string `json:"user_id"`
+		GroupID string `json:"group_id"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.UserID == "" || req.GroupID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "user_id and group_id are required"})
+	}
+	
+	if err := h.service.AddUserToGroup(id, req.UserID, req.GroupID); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "User added to group successfully"})
+}
+
+// AssignRealmRolesToGroup assigns realm roles to a group
+func (h *ClusterHandler) AssignRealmRolesToGroup(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		GroupID   string   `json:"group_id"`
+		RoleNames []string `json:"role_names"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.GroupID == "" || len(req.RoleNames) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "group_id and role_names are required"})
+	}
+	
+	if err := h.service.AssignRealmRolesToGroup(id, req.GroupID, req.RoleNames); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Realm roles assigned to group successfully"})
+}
+
+// AssignClientRolesToGroup assigns client roles to a group
+func (h *ClusterHandler) AssignClientRolesToGroup(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		GroupID    string              `json:"group_id"`
+		ClientRoles map[string][]string `json:"client_roles"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.GroupID == "" || len(req.ClientRoles) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "group_id and client_roles are required"})
+	}
+	
+	if err := h.service.AssignClientRolesToGroup(id, req.GroupID, req.ClientRoles); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Client roles assigned to group successfully"})
+}
+
+// CreateClient creates a new client in Keycloak
+func (h *ClusterHandler) CreateClient(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var client domain.ClientDetail
+	if err := c.BodyParser(&client); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if client.ClientID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "client_id is required"})
+	}
+	
+	if err := h.service.CreateClient(id, client); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Client created successfully"})
+}
+
+// GetClientRoles gets all roles for a specific client
+func (h *ClusterHandler) GetClientRoles(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	clientID := c.Query("client_id")
+	if clientID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "client_id query parameter is required"})
+	}
+	
+	roles, err := h.service.GetClientRoles(id, clientID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(roles)
+}
+
+// CreateUser creates a new user in Keycloak
+func (h *ClusterHandler) CreateUser(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var user domain.UserDetail
+	if err := c.BodyParser(&user); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if user.Username == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "username is required"})
+	}
+	
+	if err := h.service.CreateUser(id, user); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "User created successfully"})
+}
+
+// CreateGroup creates a new group in Keycloak
+func (h *ClusterHandler) CreateGroup(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var group domain.GroupDetail
+	if err := c.BodyParser(&group); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if group.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	
+	if err := h.service.CreateGroup(id, group); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Group created successfully"})
+}
+
+// CreateRealmRole creates a new realm role in Keycloak
+func (h *ClusterHandler) CreateRealmRole(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var role domain.Role
+	if err := c.BodyParser(&role); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if role.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	
+	if err := h.service.CreateRealmRole(id, role); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Realm role created successfully"})
 }
 

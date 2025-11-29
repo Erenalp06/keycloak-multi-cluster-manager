@@ -1075,10 +1075,10 @@ export default function ClusterDetail() {
               </div>
               <div className="space-y-2.5">
                 <div className="flex items-center gap-1.5">
-                  <User className="h-3.5 w-3.5 text-gray-400" />
-                  <span className="text-xs text-gray-500">Username</span>
+                  <Key className="h-3.5 w-3.5 text-gray-400" />
+                  <span className="text-xs text-gray-500">Client ID</span>
                 </div>
-                <span className="text-sm font-semibold text-gray-900 block">{cluster.username}</span>
+                <span className="text-sm font-semibold text-gray-900 block">{cluster.client_id || 'multi-manage'}</span>
               </div>
               <div className="space-y-2.5 col-span-2">
                 <div className="flex items-center gap-1.5">

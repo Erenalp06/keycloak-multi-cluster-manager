@@ -20,18 +20,40 @@ func NewClusterService(repo *postgres.ClusterRepository) *ClusterService {
 }
 
 func (s *ClusterService) Create(req domain.CreateClusterRequest) (*domain.Cluster, error) {
+	if req.Realm == "" {
+		req.Realm = "master"
+	}
+	
+	// 1. Get master realm admin token
+	masterToken, err := s.keycloakClient.GetAccessToken(
+		req.BaseURL,
+		"master",
+		req.MasterUsername,
+		req.MasterPassword,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate with master realm: %w", err)
+	}
+	
+	// 2. Setup client in the target realm
+	clientSecret, err := s.keycloakClient.SetupRealmClient(
+		req.BaseURL,
+		req.Realm,
+		masterToken,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to setup realm client: %w", err)
+	}
+	
+	// 3. Create cluster with client credentials
 	cluster := &domain.Cluster{
 		Name:            req.Name,
 		BaseURL:         req.BaseURL,
 		Realm:           req.Realm,
-		Username:        req.Username,
-		Password:        req.Password,
+		ClientID:        "multi-manage",
+		ClientSecret:    clientSecret,
 		GroupName:       req.GroupName,
 		MetricsEndpoint: req.MetricsEndpoint,
-	}
-	
-	if cluster.Realm == "" {
-		cluster.Realm = "master"
 	}
 	
 	if err := s.repo.Create(cluster); err != nil {
@@ -58,14 +80,46 @@ func (s *ClusterService) Update(id int, req domain.CreateClusterRequest) (*domai
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
+	// If realm changed or base URL changed, we need to re-setup the client
+	realmChanged := cluster.Realm != req.Realm
+	baseURLChanged := cluster.BaseURL != req.BaseURL
+	
+	if realmChanged || baseURLChanged {
+		if req.Realm == "" {
+			req.Realm = "master"
+		}
+		
+		// Get master realm admin token
+		masterToken, err := s.keycloakClient.GetAccessToken(
+			req.BaseURL,
+			"master",
+			req.MasterUsername,
+			req.MasterPassword,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to authenticate with master realm: %w", err)
+		}
+		
+		// Setup client in the new realm
+		clientSecret, err := s.keycloakClient.SetupRealmClient(
+			req.BaseURL,
+			req.Realm,
+			masterToken,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to setup realm client: %w", err)
+		}
+		
+		cluster.ClientSecret = clientSecret
+	}
+	
 	cluster.Name = req.Name
 	cluster.BaseURL = req.BaseURL
 	cluster.Realm = req.Realm
 	if cluster.Realm == "" {
 		cluster.Realm = "master"
 	}
-	cluster.Username = req.Username
-	cluster.Password = req.Password
+	cluster.ClientID = "multi-manage"
 	cluster.GroupName = req.GroupName
 	cluster.MetricsEndpoint = req.MetricsEndpoint
 	
@@ -116,6 +170,20 @@ func (s *ClusterService) HealthCheck(id int) (*domain.ClusterHealth, error) {
 	}, nil
 }
 
+// getClusterAccessToken gets access token for a cluster using client credentials
+func (s *ClusterService) getClusterAccessToken(cluster *domain.Cluster) (string, error) {
+	tokenResp, err := s.keycloakClient.GetClientCredentialsToken(
+		cluster.BaseURL,
+		cluster.Realm,
+		cluster.ClientID,
+		cluster.ClientSecret,
+	)
+	if err != nil {
+		return "", err
+	}
+	return tokenResp.AccessToken, nil
+}
+
 func (s *ClusterService) GetMetrics(id int) (*domain.ClusterMetrics, error) {
 	cluster, err := s.repo.GetByID(id)
 	if err != nil {
@@ -125,12 +193,7 @@ func (s *ClusterService) GetMetrics(id int) (*domain.ClusterMetrics, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +216,7 @@ func (s *ClusterService) GetClients(id int) ([]map[string]interface{}, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -175,12 +233,7 @@ func (s *ClusterService) GetUsers(id int, max int) ([]map[string]interface{}, er
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -197,12 +250,7 @@ func (s *ClusterService) GetGroups(id int, max int) ([]map[string]interface{}, e
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -219,12 +267,7 @@ func (s *ClusterService) GetClientDetails(id int) ([]domain.ClientDetail, error)
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -241,12 +284,7 @@ func (s *ClusterService) GetClientSecret(clusterID int, clientID string) (string
 		return "", fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return "", err
 	}
@@ -263,12 +301,7 @@ func (s *ClusterService) GetGroupDetails(id int) ([]domain.GroupDetail, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -285,12 +318,7 @@ func (s *ClusterService) GetUserDetails(id int) ([]domain.UserDetail, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -307,12 +335,7 @@ func (s *ClusterService) GetServerInfo(id int) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -400,12 +423,7 @@ func (s *ClusterService) GetRBACAnalysis(id int, roleName string) (*domain.RBACA
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -427,12 +445,7 @@ func (s *ClusterService) GetUserRBACAnalysis(id int, username string) (*domain.R
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -454,12 +467,7 @@ func (s *ClusterService) GetClientRBACAnalysis(id int, clientID string) (*domain
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
-		cluster.BaseURL,
-		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
-	)
+	token, err := s.getClusterAccessToken(cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -529,12 +537,7 @@ func (s *ClusterService) Search(req domain.SearchRequest) (*domain.SearchRespons
 	
 	// Search each cluster
 	for _, cluster := range clusters {
-		token, err := s.keycloakClient.GetAccessToken(
-			cluster.BaseURL,
-			cluster.Realm,
-			cluster.Username,
-			cluster.Password,
-		)
+		token, err := s.getClusterAccessToken(cluster)
 		if err != nil {
 			// Skip clusters that fail authentication
 			continue
@@ -594,5 +597,210 @@ func (s *ClusterService) Search(req domain.SearchRequest) (*domain.SearchRespons
 		Results:    results,
 		Total:      len(results),
 	}, nil
+}
+
+// DiscoverRealms discovers all realms in a Keycloak instance using master realm admin credentials
+func (s *ClusterService) DiscoverRealms(req domain.DiscoverRealmsRequest) ([]domain.RealmInfo, error) {
+	return s.keycloakClient.DiscoverRealms(req.BaseURL, req.Username, req.Password)
+}
+
+// AssignRealmRolesToUser assigns realm roles to a user
+func (s *ClusterService) AssignRealmRolesToUser(clusterID int, userID string, roleNames []string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.AssignRealmRolesToUser(cluster.BaseURL, cluster.Realm, token, userID, roleNames)
+}
+
+// AssignClientRolesToUser assigns client roles to a user
+func (s *ClusterService) AssignClientRolesToUser(clusterID int, userID string, clientRoles map[string][]string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.AssignClientRolesToUser(cluster.BaseURL, cluster.Realm, token, userID, clientRoles)
+}
+
+// AddUserToGroup adds a user to a group
+func (s *ClusterService) AddUserToGroup(clusterID int, userID, groupID string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.AddUserToGroup(cluster.BaseURL, cluster.Realm, token, userID, groupID)
+}
+
+// AssignRealmRolesToGroup assigns realm roles to a group
+func (s *ClusterService) AssignRealmRolesToGroup(clusterID int, groupID string, roleNames []string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.AssignRealmRolesToGroup(cluster.BaseURL, cluster.Realm, token, groupID, roleNames)
+}
+
+// AssignClientRolesToGroup assigns client roles to a group
+func (s *ClusterService) AssignClientRolesToGroup(clusterID int, groupID string, clientRoles map[string][]string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.AssignClientRolesToGroup(cluster.BaseURL, cluster.Realm, token, groupID, clientRoles)
+}
+
+// CreateClient creates a new client in Keycloak
+func (s *ClusterService) CreateClient(clusterID int, client domain.ClientDetail) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.CreateClient(cluster.BaseURL, cluster.Realm, token, client)
+}
+
+// GetClientRoles gets all roles for a specific client
+func (s *ClusterService) GetClientRoles(clusterID int, clientID string) ([]map[string]interface{}, error) {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Get client UUID first
+	clients, err := s.keycloakClient.GetClients(cluster.BaseURL, cluster.Realm, token)
+	if err != nil {
+		return nil, err
+	}
+	
+	var clientUUID string
+	for _, client := range clients {
+		if id, ok := client["clientId"].(string); ok && id == clientID {
+			if uuid, ok := client["id"].(string); ok {
+				clientUUID = uuid
+				break
+			}
+		}
+	}
+	
+	if clientUUID == "" {
+		return nil, fmt.Errorf("client not found: %s", clientID)
+	}
+	
+	return s.keycloakClient.GetClientRoles(cluster.BaseURL, cluster.Realm, token, clientUUID)
+}
+
+// CreateUser creates a new user in Keycloak
+func (s *ClusterService) CreateUser(clusterID int, user domain.UserDetail) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.CreateUser(cluster.BaseURL, cluster.Realm, token, user)
+}
+
+// CreateGroup creates a new group in Keycloak
+func (s *ClusterService) CreateGroup(clusterID int, group domain.GroupDetail) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.CreateGroup(cluster.BaseURL, cluster.Realm, token, group)
+}
+
+// CreateRealmRole creates a new realm role in Keycloak
+func (s *ClusterService) CreateRealmRole(clusterID int, role domain.Role) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	return s.keycloakClient.CreateRole(cluster.BaseURL, cluster.Realm, token, role)
 }
 

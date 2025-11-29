@@ -16,7 +16,7 @@ func NewClusterRepository(db *sql.DB) *ClusterRepository {
 
 func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 	query := `
-		INSERT INTO clusters (name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at)
+		INSERT INTO clusters (name, base_url, realm, client_id, client_secret, group_name, metrics_endpoint, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
 	`
@@ -27,8 +27,8 @@ func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 		cluster.Name,
 		cluster.BaseURL,
 		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
+		cluster.ClientID,
+		cluster.ClientSecret,
 		cluster.GroupName,
 		cluster.MetricsEndpoint,
 		now,
@@ -46,7 +46,7 @@ func (r *ClusterRepository) Create(cluster *domain.Cluster) error {
 
 func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 	query := `
-		SELECT id, name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at
+		SELECT id, name, base_url, realm, client_id, client_secret, group_name, metrics_endpoint, created_at, updated_at
 		FROM clusters
 		ORDER BY COALESCE(group_name, ''), name
 	`
@@ -60,13 +60,15 @@ func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 	var clusters []*domain.Cluster
 	for rows.Next() {
 		cluster := &domain.Cluster{}
+		var clientID sql.NullString
+		var clientSecret sql.NullString
 		err := rows.Scan(
 			&cluster.ID,
 			&cluster.Name,
 			&cluster.BaseURL,
 			&cluster.Realm,
-			&cluster.Username,
-			&cluster.Password,
+			&clientID,
+			&clientSecret,
 			&cluster.GroupName,
 			&cluster.MetricsEndpoint,
 			&cluster.CreatedAt,
@@ -74,6 +76,17 @@ func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 		)
 		if err != nil {
 			return nil, err
+		}
+		// Handle NULL values - default to "multi-manage" if client_id is NULL
+		if clientID.Valid {
+			cluster.ClientID = clientID.String
+		} else {
+			cluster.ClientID = "multi-manage"
+		}
+		if clientSecret.Valid {
+			cluster.ClientSecret = clientSecret.String
+		} else {
+			cluster.ClientSecret = ""
 		}
 		clusters = append(clusters, cluster)
 	}
@@ -83,24 +96,38 @@ func (r *ClusterRepository) GetAll() ([]*domain.Cluster, error) {
 
 func (r *ClusterRepository) GetByID(id int) (*domain.Cluster, error) {
 	query := `
-		SELECT id, name, base_url, realm, username, password, group_name, metrics_endpoint, created_at, updated_at
+		SELECT id, name, base_url, realm, client_id, client_secret, group_name, metrics_endpoint, created_at, updated_at
 		FROM clusters
 		WHERE id = $1
 	`
 	
 	cluster := &domain.Cluster{}
+	var clientID sql.NullString
+	var clientSecret sql.NullString
 	err := r.db.QueryRow(query, id).Scan(
 		&cluster.ID,
 		&cluster.Name,
 		&cluster.BaseURL,
 		&cluster.Realm,
-		&cluster.Username,
-		&cluster.Password,
+		&clientID,
+		&clientSecret,
 		&cluster.GroupName,
 		&cluster.MetricsEndpoint,
 		&cluster.CreatedAt,
 		&cluster.UpdatedAt,
 	)
+	
+	// Handle NULL values - default to "multi-manage" if client_id is NULL
+	if clientID.Valid {
+		cluster.ClientID = clientID.String
+	} else {
+		cluster.ClientID = "multi-manage"
+	}
+	if clientSecret.Valid {
+		cluster.ClientSecret = clientSecret.String
+	} else {
+		cluster.ClientSecret = ""
+	}
 	
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -115,7 +142,7 @@ func (r *ClusterRepository) GetByID(id int) (*domain.Cluster, error) {
 func (r *ClusterRepository) Update(cluster *domain.Cluster) error {
 	query := `
 		UPDATE clusters 
-		SET name = $1, base_url = $2, realm = $3, username = $4, password = $5, group_name = $6, metrics_endpoint = $7, updated_at = $8
+		SET name = $1, base_url = $2, realm = $3, client_id = $4, client_secret = $5, group_name = $6, metrics_endpoint = $7, updated_at = $8
 		WHERE id = $9
 	`
 	
@@ -125,8 +152,8 @@ func (r *ClusterRepository) Update(cluster *domain.Cluster) error {
 		cluster.Name,
 		cluster.BaseURL,
 		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
+		cluster.ClientID,
+		cluster.ClientSecret,
 		cluster.GroupName,
 		cluster.MetricsEndpoint,
 		now,

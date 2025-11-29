@@ -18,14 +18,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - keycloak-network
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: keycloak-multi-backend
-    ports:
-      - "8080:8080"
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
@@ -38,28 +38,47 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # Binary is built into the image, no volume mount needed
     command: ./server
+    networks:
+      - keycloak-network
 
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: Dockerfile
-  #   container_name: keycloak-multi-frontend
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     REACT_APP_API_URL: http://localhost:8080/api
-  #     CHOKIDAR_USEPOLLING: "true"
-  #   depends_on:
-  #     - backend
-  #   volumes:
-  #     - ./frontend:/app
-  #     - /app/node_modules
-  #   stdin_open: true
-  #   tty: true
-  #   command: sh -c "npm start"
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # API URL will be determined dynamically from window.location
+        # Set REACT_APP_API_URL only if you want to override
+        REACT_APP_API_URL: ${REACT_APP_API_URL:-}
+    container_name: keycloak-multi-frontend
+    depends_on:
+      - backend
+    networks:
+      - keycloak-network
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: keycloak-multi-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginx_ssl:/etc/nginx/ssl
+    environment:
+      - SSL_CN=${SSL_CN:-localhost}
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - keycloak-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  nginx_ssl:
 
+networks:
+  keycloak-network:
+    driver: bridge

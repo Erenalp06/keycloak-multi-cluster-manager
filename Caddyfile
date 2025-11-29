@@ -1,0 +1,25 @@
+{
+    debug
+    local_certs
+    auto_https off
+}
+
+keycloak.me, localhost {
+    tls internal
+
+    handle_path /health {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    handle_path /api/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+}
+
+http://keycloak.me, http://localhost {
+    redir https://{host}{uri} permanent
+}

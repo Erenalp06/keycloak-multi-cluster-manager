@@ -62,10 +62,26 @@ module.exports = {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: 0 },
         },
+        "gridMove": {
+          "0%": { transform: "translate(0, 0)" },
+          "100%": { transform: "translate(50px, 50px)" },
+        },
+        "dataFlow": {
+          "0%": { transform: "translateY(-100px)", opacity: "0" },
+          "50%": { opacity: "0.8" },
+          "100%": { transform: "translateY(500px)", opacity: "0" },
+        },
+        "fadeInUp": {
+          from: { opacity: "0", transform: "translateY(20px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "gridMove": "gridMove 20s linear infinite",
+        "dataFlow": "dataFlow 3s linear infinite",
+        "fadeInUp": "fadeInUp 0.6s ease-out",
       },
     },
   },

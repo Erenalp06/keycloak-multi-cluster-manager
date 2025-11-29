@@ -28,17 +28,17 @@ func (s *RoleService) GetRoles(clusterID int) ([]domain.Role, error) {
 		return nil, fmt.Errorf("cluster not found")
 	}
 	
-	token, err := s.keycloakClient.GetAccessToken(
+	tokenResp, err := s.keycloakClient.GetClientCredentialsToken(
 		cluster.BaseURL,
 		cluster.Realm,
-		cluster.Username,
-		cluster.Password,
+		cluster.ClientID,
+		cluster.ClientSecret,
 	)
 	if err != nil {
 		return nil, err
 	}
 	
-	roles, err := s.keycloakClient.GetRoles(cluster.BaseURL, cluster.Realm, token)
+	roles, err := s.keycloakClient.GetRoles(cluster.BaseURL, cluster.Realm, tokenResp.AccessToken)
 	if err != nil {
 		return nil, err
 	}

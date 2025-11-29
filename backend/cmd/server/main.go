@@ -72,6 +72,19 @@ func main() {
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 	}))
 	
+	// Public root endpoint (no auth required)
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.Status(200).JSON(fiber.Map{
+			"status": "ok",
+			"message": "Keycloak Multi-Manage API",
+		})
+	})
+	
+	// Public health endpoint (no auth required)
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.Status(200).SendString("OK")
+	})
+	
 	// Routes
 	api := app.Group("/api")
 	
@@ -106,8 +119,21 @@ func main() {
 	// Admin-only cluster operations
 	adminClusters := protected.Group("/clusters", middleware.PermissionMiddleware(appRoleService, "manage_roles"))
 	adminClusters.Post("/", middleware.PermissionMiddleware(appRoleService, "create_cluster"), clusterHandler.Create)
+	adminClusters.Post("/discover", middleware.PermissionMiddleware(appRoleService, "create_cluster"), clusterHandler.DiscoverRealms)
 	adminClusters.Put("/:id", middleware.PermissionMiddleware(appRoleService, "update_cluster"), clusterHandler.Update)
 	adminClusters.Delete("/:id", middleware.PermissionMiddleware(appRoleService, "delete_cluster"), clusterHandler.Delete)
+	
+	// Keycloak management operations
+	adminClusters.Post("/:id/users/assign-realm-roles", clusterHandler.AssignRealmRolesToUser)
+	adminClusters.Post("/:id/users/assign-client-roles", clusterHandler.AssignClientRolesToUser)
+	adminClusters.Post("/:id/users/add-to-group", clusterHandler.AddUserToGroup)
+	adminClusters.Post("/:id/users/create", clusterHandler.CreateUser)
+	adminClusters.Post("/:id/groups/assign-realm-roles", clusterHandler.AssignRealmRolesToGroup)
+	adminClusters.Post("/:id/groups/assign-client-roles", clusterHandler.AssignClientRolesToGroup)
+	adminClusters.Post("/:id/groups/create", clusterHandler.CreateGroup)
+	adminClusters.Post("/:id/roles/create", clusterHandler.CreateRealmRole)
+	adminClusters.Post("/:id/clients/create", clusterHandler.CreateClient)
+	adminClusters.Get("/:id/clients/roles", clusterHandler.GetClientRoles)
 	
 	// Role routes
 	roles := protected.Group("/roles")

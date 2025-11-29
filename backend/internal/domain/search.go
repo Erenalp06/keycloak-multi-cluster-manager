@@ -24,3 +24,4 @@ type SearchResponse struct {
 	Total      int           `json:"total"`
 }
 
+

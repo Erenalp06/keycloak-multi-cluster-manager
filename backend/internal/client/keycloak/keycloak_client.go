@@ -2036,6 +2036,401 @@ func (c *Client) getUserByUsername(baseURL, realm, accessToken, username string)
 	return users[0], nil
 }
 
+// DiscoverRealms discovers all realms in a Keycloak instance using master realm admin credentials
+func (c *Client) DiscoverRealms(baseURL, username, password string) ([]domain.RealmInfo, error) {
+	// Get admin token from master realm
+	accessToken, err := c.GetAccessToken(baseURL, "master", username, password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get admin token: %w", err)
+	}
+
+	// Get all realms
+	url := fmt.Sprintf("%s/admin/realms", baseURL)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to discover realms: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var realms []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&realms); err != nil {
+		return nil, err
+	}
+	
+	realmInfos := make([]domain.RealmInfo, 0, len(realms))
+	for _, realm := range realms {
+		realmName, ok := realm["realm"].(string)
+		if !ok {
+			continue
+		}
+		
+		enabled, ok := realm["enabled"].(bool)
+		if !ok {
+			enabled = true // Default to enabled if not specified
+		}
+		
+		realmInfos = append(realmInfos, domain.RealmInfo{
+			Realm:   realmName,
+			Enabled: enabled,
+		})
+	}
+	
+	return realmInfos, nil
+}
+
+// CreateMultiManageClient creates the multi-manage client in a realm
+func (c *Client) CreateMultiManageClient(baseURL, realm, accessToken, clientID string) error {
+	// Check if client already exists
+	clients, err := c.getClients(baseURL, realm, accessToken)
+	if err != nil {
+		return fmt.Errorf("failed to check existing clients: %w", err)
+	}
+	
+	for _, client := range clients {
+		if id, ok := client["clientId"].(string); ok && id == clientID {
+			// Client already exists
+			return nil
+		}
+	}
+	
+	// Create client
+	url := fmt.Sprintf("%s/admin/realms/%s/clients", baseURL, realm)
+	
+	clientData := map[string]interface{}{
+		"clientId":                clientID,
+		"enabled":                 true,
+		"clientAuthenticatorType": "client-secret",
+		"serviceAccountsEnabled":  true,
+		"standardFlowEnabled":     false,
+		"implicitFlowEnabled":     false,
+		"directAccessGrantsEnabled": false,
+		"publicClient":            false,
+	}
+	
+	jsonData, err := json.Marshal(clientData)
+	if err != nil {
+		return err
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create client: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// GetServiceAccountUser gets the service account user for a client
+func (c *Client) GetServiceAccountUser(baseURL, realm, accessToken, clientID string) (map[string]interface{}, error) {
+	// First, get the client UUID
+	clients, err := c.getClients(baseURL, realm, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clients: %w", err)
+	}
+	
+	var clientUUID string
+	for _, client := range clients {
+		if id, ok := client["clientId"].(string); ok && id == clientID {
+			if uuid, ok := client["id"].(string); ok {
+				clientUUID = uuid
+				break
+			}
+		}
+	}
+	
+	if clientUUID == "" {
+		return nil, fmt.Errorf("client not found: %s", clientID)
+	}
+	
+	// Get service account user
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/service-account-user", baseURL, realm, clientUUID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get service account user: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var user map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, err
+	}
+	
+	return user, nil
+}
+
+// AssignRealmAdminRoleToServiceAccount assigns realm-admin role to service account user
+// Tries both realm role and client role (realm-management client)
+// Tries multiple role names: realm-admin, admin, administrator
+func (c *Client) AssignRealmAdminRoleToServiceAccount(baseURL, realm, accessToken, userID, multiManageClientUUID string) error {
+	// Try different admin role names
+	roleNames := []string{"realm-admin", "admin", "administrator"}
+	
+	var role map[string]interface{}
+	var foundRole bool
+	
+	for _, roleName := range roleNames {
+		url := fmt.Sprintf("%s/admin/realms/%s/roles/%s", baseURL, realm, roleName)
+		
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&role); err == nil {
+				foundRole = true
+				break
+			}
+		}
+	}
+	
+	if !foundRole {
+		// If no admin role found, try to get all roles and find one with admin in the name
+		url := fmt.Sprintf("%s/admin/realms/%s/roles", baseURL, realm)
+		
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return fmt.Errorf("no admin role found and failed to list roles: %w", err)
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("no admin role found and failed to list roles: %w", err)
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode == http.StatusOK {
+			var roles []map[string]interface{}
+			if err := json.NewDecoder(resp.Body).Decode(&roles); err == nil {
+				// Look for any role with "admin" in the name (case insensitive)
+				for _, r := range roles {
+					if name, ok := r["name"].(string); ok {
+						nameLower := strings.ToLower(name)
+						if strings.Contains(nameLower, "admin") {
+							role = r
+							foundRole = true
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Try to assign realm role first if found
+	if foundRole {
+		url := fmt.Sprintf("%s/admin/realms/%s/users/%s/role-mappings/realm", baseURL, realm, userID)
+		
+		roles := []map[string]interface{}{role}
+		jsonData, err := json.Marshal(roles)
+		if err != nil {
+			// Continue to try client role
+		} else {
+			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+			if err == nil {
+				req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+				req.Header.Set("Content-Type", "application/json")
+				
+				resp, err := c.httpClient.Do(req)
+				if err == nil {
+					resp.Body.Close()
+					if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+						return nil // Success with realm role!
+					}
+				}
+			}
+		}
+	}
+	
+	// If realm role assignment failed or not found, try client role from realm-management
+	// Get realm-management client UUID
+	clients, err := c.getClients(baseURL, realm, accessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get clients for client role assignment: %w", err)
+	}
+	
+	var realmManagementClientUUID string
+	for _, client := range clients {
+		if id, ok := client["clientId"].(string); ok && id == "realm-management" {
+			if uuid, ok := client["id"].(string); ok {
+				realmManagementClientUUID = uuid
+				break
+			}
+		}
+	}
+	
+	if realmManagementClientUUID == "" {
+		return fmt.Errorf("realm-management client not found - cannot assign client role")
+	}
+	
+	// Try to get realm-admin client role from realm-management
+	for _, roleName := range roleNames {
+		url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles/%s", baseURL, realm, realmManagementClientUUID, roleName)
+		
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode == http.StatusOK {
+			var clientRole map[string]interface{}
+			if err := json.NewDecoder(resp.Body).Decode(&clientRole); err == nil {
+				// Assign client role to user
+				assignURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/role-mappings/clients/%s", baseURL, realm, userID, realmManagementClientUUID)
+				
+				roles := []map[string]interface{}{clientRole}
+				jsonData, err := json.Marshal(roles)
+				if err != nil {
+					continue
+				}
+				
+				assignReq, err := http.NewRequest("POST", assignURL, bytes.NewBuffer(jsonData))
+				if err != nil {
+					continue
+				}
+				
+				assignReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+				assignReq.Header.Set("Content-Type", "application/json")
+				
+				assignResp, err := c.httpClient.Do(assignReq)
+				if err != nil {
+					continue
+				}
+				defer assignResp.Body.Close()
+				
+				if assignResp.StatusCode == http.StatusNoContent || assignResp.StatusCode == http.StatusOK {
+					return nil // Success with client role!
+				}
+			}
+		}
+	}
+	
+	// If still no role found or assigned, log a warning but don't fail
+	return fmt.Errorf("no admin role found or assigned in realm %s - client created but role assignment skipped. You may need to manually assign admin role to service account", realm)
+}
+
+// SetupRealmClient sets up the multi-manage client in a realm
+// Returns the client secret
+func (c *Client) SetupRealmClient(baseURL, realm, masterAccessToken string) (string, error) {
+	clientID := "multi-manage"
+	
+	// 1. Create client if it doesn't exist
+	if err := c.CreateMultiManageClient(baseURL, realm, masterAccessToken, clientID); err != nil {
+		return "", fmt.Errorf("failed to create client: %w", err)
+	}
+	
+	// 2. Get client UUID
+	clients, err := c.getClients(baseURL, realm, masterAccessToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to get clients: %w", err)
+	}
+	
+	var clientUUID string
+	for _, client := range clients {
+		if id, ok := client["clientId"].(string); ok && id == clientID {
+			if uuid, ok := client["id"].(string); ok {
+				clientUUID = uuid
+				break
+			}
+		}
+	}
+	
+	if clientUUID == "" {
+		return "", fmt.Errorf("client not found after creation: %s", clientID)
+	}
+	
+	// 3. Get client secret
+	secret, err := c.GetClientSecret(baseURL, realm, masterAccessToken, clientUUID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get client secret: %w", err)
+	}
+	
+	// 4. Get service account user
+	serviceAccountUser, err := c.GetServiceAccountUser(baseURL, realm, masterAccessToken, clientID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get service account user: %w", err)
+	}
+	
+	userID, ok := serviceAccountUser["id"].(string)
+	if !ok {
+		return "", fmt.Errorf("service account user ID not found")
+	}
+	
+	// 5. Assign realm-admin role to service account (non-critical, log warning if fails)
+	if err := c.AssignRealmAdminRoleToServiceAccount(baseURL, realm, masterAccessToken, userID, clientUUID); err != nil {
+		// Log warning but don't fail - client is created and secret is obtained
+		// User can manually assign admin role later if needed
+		// Return secret anyway since the most important part (client creation) succeeded
+		fmt.Printf("Warning: Failed to assign admin role to service account: %v\n", err)
+		// Continue anyway - client and secret are the critical parts
+	}
+	
+	return secret, nil
+}
+
 // getClientByID gets a client by ID
 func (c *Client) getClientByID(baseURL, realm, accessToken, clientID string) (map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s", baseURL, realm, clientID)
@@ -2061,6 +2456,361 @@ func (c *Client) getClientByID(baseURL, realm, accessToken, clientID string) (ma
 	var client map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&client)
 	return client, nil
+}
+
+// AssignRealmRolesToUser assigns realm roles to a user (public method)
+func (c *Client) AssignRealmRolesToUser(baseURL, realm, accessToken, userID string, roleNames []string) error {
+	roles, err := c.GetRoles(baseURL, realm, accessToken)
+	if err != nil {
+		return err
+	}
+	
+	var roleIDs []map[string]interface{}
+	for _, roleName := range roleNames {
+		for _, role := range roles {
+			if role.Name == roleName {
+				roleIDs = append(roleIDs, map[string]interface{}{
+					"id":   role.ID,
+					"name": role.Name,
+				})
+				break
+			}
+		}
+	}
+	
+	if len(roleIDs) == 0 {
+		return fmt.Errorf("no roles found")
+	}
+	
+	url := fmt.Sprintf("%s/admin/realms/%s/users/%s/role-mappings/realm", baseURL, realm, userID)
+	jsonData, err := json.Marshal(roleIDs)
+	if err != nil {
+		return err
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to assign realm roles: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// AssignClientRolesToUser assigns client roles to a user (public method)
+func (c *Client) AssignClientRolesToUser(baseURL, realm, accessToken, userID string, clientRoles map[string][]string) error {
+	for clientID, roleNames := range clientRoles {
+		if len(roleNames) == 0 {
+			continue
+		}
+		
+		// Get client UUID first
+		clients, err := c.getClients(baseURL, realm, accessToken)
+		if err != nil {
+			continue
+		}
+		
+		var clientUUID string
+		for _, client := range clients {
+			if id, ok := client["clientId"].(string); ok && id == clientID {
+				if uuid, ok := client["id"].(string); ok {
+					clientUUID = uuid
+					break
+				}
+			}
+		}
+		
+		if clientUUID == "" {
+			continue
+		}
+		
+		// Get client roles
+		url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles", baseURL, realm, clientUUID)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+		
+		var clientRolesList []map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&clientRolesList); err != nil {
+			continue
+		}
+		
+		// Find role IDs
+		var roleIDs []map[string]interface{}
+		for _, roleName := range roleNames {
+			for _, role := range clientRolesList {
+				if name, ok := role["name"].(string); ok && name == roleName {
+					roleIDs = append(roleIDs, role)
+					break
+				}
+			}
+		}
+		
+		if len(roleIDs) == 0 {
+			continue
+		}
+		
+		// Assign roles
+		assignURL := fmt.Sprintf("%s/admin/realms/%s/users/%s/role-mappings/clients/%s", baseURL, realm, userID, clientUUID)
+		jsonData, err := json.Marshal(roleIDs)
+		if err != nil {
+			continue
+		}
+		
+		assignReq, err := http.NewRequest("POST", assignURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			continue
+		}
+		
+		assignReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		assignReq.Header.Set("Content-Type", "application/json")
+		
+		assignResp, err := c.httpClient.Do(assignReq)
+		if err != nil {
+			continue
+		}
+		defer assignResp.Body.Close()
+		
+		if assignResp.StatusCode != http.StatusNoContent && assignResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(assignResp.Body)
+			return fmt.Errorf("failed to assign client roles for client %s: status %d, body: %s", clientID, assignResp.StatusCode, string(body))
+		}
+	}
+	
+	return nil
+}
+
+// AddUserToGroup adds a user to a group
+func (c *Client) AddUserToGroup(baseURL, realm, accessToken, userID, groupID string) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/users/%s/groups/%s", baseURL, realm, userID, groupID)
+	
+	req, err := http.NewRequest("PUT", url, nil)
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to add user to group: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// AssignRealmRolesToGroup assigns realm roles to a group
+func (c *Client) AssignRealmRolesToGroup(baseURL, realm, accessToken, groupID string, roleNames []string) error {
+	roles, err := c.GetRoles(baseURL, realm, accessToken)
+	if err != nil {
+		return err
+	}
+	
+	var roleIDs []map[string]interface{}
+	for _, roleName := range roleNames {
+		for _, role := range roles {
+			if role.Name == roleName {
+				roleIDs = append(roleIDs, map[string]interface{}{
+					"id":   role.ID,
+					"name": role.Name,
+				})
+				break
+			}
+		}
+	}
+	
+	if len(roleIDs) == 0 {
+		return fmt.Errorf("no roles found")
+	}
+	
+	url := fmt.Sprintf("%s/admin/realms/%s/groups/%s/role-mappings/realm", baseURL, realm, groupID)
+	jsonData, err := json.Marshal(roleIDs)
+	if err != nil {
+		return err
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to assign realm roles to group: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// AssignClientRolesToGroup assigns client roles to a group
+func (c *Client) AssignClientRolesToGroup(baseURL, realm, accessToken, groupID string, clientRoles map[string][]string) error {
+	for clientID, roleNames := range clientRoles {
+		if len(roleNames) == 0 {
+			continue
+		}
+		
+		// Get client UUID first
+		clients, err := c.getClients(baseURL, realm, accessToken)
+		if err != nil {
+			continue
+		}
+		
+		var clientUUID string
+		for _, client := range clients {
+			if id, ok := client["clientId"].(string); ok && id == clientID {
+				if uuid, ok := client["id"].(string); ok {
+					clientUUID = uuid
+					break
+				}
+			}
+		}
+		
+		if clientUUID == "" {
+			continue
+		}
+		
+		// Get client roles
+		url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles", baseURL, realm, clientUUID)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		req.Header.Set("Content-Type", "application/json")
+		
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode != http.StatusOK {
+			continue
+		}
+		
+		var clientRolesList []map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&clientRolesList); err != nil {
+			continue
+		}
+		
+		// Find role IDs
+		var roleIDs []map[string]interface{}
+		for _, roleName := range roleNames {
+			for _, role := range clientRolesList {
+				if name, ok := role["name"].(string); ok && name == roleName {
+					roleIDs = append(roleIDs, role)
+					break
+				}
+			}
+		}
+		
+		if len(roleIDs) == 0 {
+			continue
+		}
+		
+		// Assign roles
+		assignURL := fmt.Sprintf("%s/admin/realms/%s/groups/%s/role-mappings/clients/%s", baseURL, realm, groupID, clientUUID)
+		jsonData, err := json.Marshal(roleIDs)
+		if err != nil {
+			continue
+		}
+		
+		assignReq, err := http.NewRequest("POST", assignURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			continue
+		}
+		
+		assignReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		assignReq.Header.Set("Content-Type", "application/json")
+		
+		assignResp, err := c.httpClient.Do(assignReq)
+		if err != nil {
+			continue
+		}
+		defer assignResp.Body.Close()
+		
+		if assignResp.StatusCode != http.StatusNoContent && assignResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(assignResp.Body)
+			return fmt.Errorf("failed to assign client roles to group for client %s: status %d, body: %s", clientID, assignResp.StatusCode, string(body))
+		}
+	}
+	
+	return nil
+}
+
+// GetClientRoles gets all roles for a specific client (public method)
+func (c *Client) GetClientRoles(baseURL, realm, accessToken, clientUUID string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles", baseURL, realm, clientUUID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get client roles: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var roles []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&roles); err != nil {
+		return nil, err
+	}
+	
+	return roles, nil
 }
 
 // getClientRoleDetails gets details of a client role

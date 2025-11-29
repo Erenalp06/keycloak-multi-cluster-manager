@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics } from '@/services/api';
+import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics, DiscoverRealmsRequest, RealmInfo } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,10 +8,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Trash2, Plus, Activity, Eye, Shield, Users, Key, Building2, Network, Server, X, CheckCircle2, AlertCircle, Tag, Grid3x3, List, Filter, Edit, ChevronDown, ChevronRight, Folder, Search } from 'lucide-react';
+import { Trash2, Plus, Activity, Eye, Shield, Users, Key, Building2, Network, Server, X, CheckCircle2, AlertCircle, Tag, Grid3x3, List, Filter, Edit, ChevronDown, ChevronRight, Folder, Search, Search as SearchIcon, Loader2, ExternalLink } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import TokenInspectorDialog from '@/components/TokenInspectorDialog';
 import MultiClusterSearch from '@/components/MultiClusterSearch';
+import RealmTable from '@/components/RealmTable';
 
 type ViewMode = 'grid' | 'list';
 type HealthFilter = 'all' | 'online' | 'offline';
@@ -51,14 +52,23 @@ export default function ClusterList() {
     open: false,
     clusterId: null,
   });
+  const [addMode, setAddMode] = useState<'manual' | 'discover'>('manual');
+  const [discoverFormData, setDiscoverFormData] = useState<DiscoverRealmsRequest>({
+    base_url: '',
+    username: '',
+    password: '',
+  });
+  const [discoveredRealms, setDiscoveredRealms] = useState<RealmInfo[]>([]);
+  const [discovering, setDiscovering] = useState(false);
+  const [selectedRealms, setSelectedRealms] = useState<Set<string>>(new Set());
   
 
   const [formData, setFormData] = useState({
     name: '',
     base_url: '',
     realm: 'master',
-    username: '',
-    password: '',
+    master_username: '',
+    master_password: '',
     group_name: '',
     metrics_endpoint: '',
   });
@@ -70,8 +80,8 @@ export default function ClusterList() {
     name: '',
     base_url: '',
     realm: 'master',
-    username: '',
-    password: '',
+    master_username: '',
+    master_password: '',
     group_name: '',
     metrics_endpoint: '',
   });
@@ -166,8 +176,8 @@ export default function ClusterList() {
         name: '',
         base_url: '',
         realm: 'master',
-        username: '',
-        password: '',
+        master_username: '',
+        master_password: '',
         group_name: '',
         metrics_endpoint: '',
       });
@@ -180,13 +190,55 @@ export default function ClusterList() {
     }
   };
 
+  const handleDiscover = async () => {
+    try {
+      setDiscovering(true);
+      const realms = await clusterApi.discoverRealms(discoverFormData);
+      setDiscoveredRealms(realms);
+    } catch (error: any) {
+      alert(error.message || 'Failed to discover realms');
+      setDiscoveredRealms([]);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const handleAddSelectedRealms = async () => {
+    try {
+      const promises = Array.from(selectedRealms).map(realm => {
+        return clusterApi.create({
+          name: `${discoverFormData.base_url.replace(/^https?:\/\//, '').replace(/\/$/, '')}-${realm}`,
+          base_url: discoverFormData.base_url,
+          realm: realm,
+          master_username: discoverFormData.username,
+          master_password: discoverFormData.password,
+        });
+      });
+      
+      await Promise.all(promises);
+      setIsDialogOpen(false);
+      setDiscoveredRealms([]);
+      setSelectedRealms(new Set());
+      setDiscoverFormData({
+        base_url: '',
+        username: '',
+        password: '',
+      });
+      setAddMode('manual');
+      loadClusters();
+      window.dispatchEvent(new CustomEvent('clusterUpdated'));
+    } catch (error: any) {
+      alert(error.message || 'Failed to add clusters');
+    }
+  };
+
   const handleEdit = (cluster: Cluster) => {
     setEditFormData({
       name: cluster.name,
       base_url: cluster.base_url,
       realm: cluster.realm,
-      username: cluster.username,
-      password: cluster.password,
+      master_username: '', // Not stored, user needs to provide again
+      master_password: '', // Not stored, user needs to provide again
       group_name: cluster.group_name || '',
       metrics_endpoint: cluster.metrics_endpoint || '',
     });
@@ -201,8 +253,8 @@ export default function ClusterList() {
         name: editFormData.name,
         base_url: editFormData.base_url,
         realm: editFormData.realm,
-        username: editFormData.username,
-        password: editFormData.password,
+        master_username: editFormData.master_username,
+        master_password: editFormData.master_password,
       };
       
       // Handle group_name: send null if empty, otherwise send the trimmed value
@@ -225,8 +277,8 @@ export default function ClusterList() {
         name: '',
         base_url: '',
         realm: 'master',
-        username: '',
-        password: '',
+        master_username: '',
+        master_password: '',
         group_name: '',
         metrics_endpoint: '',
       });
@@ -275,8 +327,8 @@ export default function ClusterList() {
         name: cluster.name,
         base_url: cluster.base_url,
         realm: cluster.realm,
-        username: cluster.username,
-        password: cluster.password,
+        master_username: '', // Not needed if realm/base_url unchanged
+        master_password: '', // Not needed if realm/base_url unchanged
         group_name: groupName.trim() === '' ? undefined : groupName.trim(),
       });
       setGroupDialog({ open: false, clusterId: null, currentGroup: '' });
@@ -665,100 +717,296 @@ export default function ClusterList() {
           </Button>
 
           {isAdmin && (
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => {
+            setIsDialogOpen(open);
+            if (!open) {
+              // Reset states when dialog closes
+              setAddMode('manual');
+              setDiscoveredRealms([]);
+              setSelectedRealms(new Set());
+              setDiscoverFormData({
+                base_url: '',
+                username: '',
+                password: '',
+              });
+            }
+          }}>
             <DialogTrigger asChild>
               <Button className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9">
                 <Plus className="mr-1.5 h-4 w-4" />
                 Add Cluster
               </Button>
             </DialogTrigger>
-          <DialogContent className="sm:max-w-[500px]">
+          <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <DialogTitle className="text-base">Add New Cluster</DialogTitle>
               <DialogDescription className="text-sm">
-                Enter the details of your Keycloak cluster.
+                Add a cluster manually or discover realms from a Keycloak instance.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
+
+            {/* Mode Toggle */}
+            <div className="flex items-center gap-2 mb-4 border-b pb-3">
+              <Button
+                variant={addMode === 'manual' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAddMode('manual')}
+                className={`text-sm h-8 ${addMode === 'manual' ? 'bg-[#4a5568] hover:bg-[#374151] text-white' : ''}`}
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Manual
+              </Button>
+              <Button
+                variant={addMode === 'discover' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAddMode('discover')}
+                className={`text-sm h-8 ${addMode === 'discover' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+              >
+                <SearchIcon className="mr-1.5 h-3.5 w-3.5" />
+                Discover
+              </Button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {addMode === 'manual' ? (
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="name" className="text-sm">Name</Label>
+                    <Input
+                      id="name"
+                      className="h-9"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      placeholder="dev-cluster"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="base_url" className="text-sm">Base URL</Label>
+                    <Input
+                      id="base_url"
+                      className="h-9"
+                      value={formData.base_url}
+                      onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
+                      placeholder="https://keycloak.example.com"
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="realm" className="text-sm">Realm</Label>
+                    <Input
+                      id="realm"
+                      className="h-9"
+                      value={formData.realm}
+                      onChange={(e) => setFormData({ ...formData, realm: e.target.value })}
+                      placeholder="master"
+                    />
+                  </div>
               <div className="grid gap-2">
-                <Label htmlFor="name" className="text-sm">Name</Label>
+                <Label htmlFor="master_username" className="text-sm">Master Realm Admin Username</Label>
                 <Input
-                  id="name"
+                  id="master_username"
                   className="h-9"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="dev-cluster"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="base_url" className="text-sm">Base URL</Label>
-                <Input
-                  id="base_url"
-                  className="h-9"
-                  value={formData.base_url}
-                  onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
-                  placeholder="https://keycloak.example.com"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="realm" className="text-sm">Realm</Label>
-                <Input
-                  id="realm"
-                  className="h-9"
-                  value={formData.realm}
-                  onChange={(e) => setFormData({ ...formData, realm: e.target.value })}
-                  placeholder="master"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="username" className="text-sm">Username</Label>
-                <Input
-                  id="username"
-                  className="h-9"
-                  value={formData.username}
-                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  value={formData.master_username}
+                  onChange={(e) => setFormData({ ...formData, master_username: e.target.value })}
                   placeholder="admin"
                 />
+                <p className="text-xs text-gray-500">
+                  Master realm admin credentials (used only during setup to create service account)
+                </p>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="password" className="text-sm">Password</Label>
+                <Label htmlFor="master_password" className="text-sm">Master Realm Admin Password</Label>
                 <Input
-                  id="password"
+                  id="master_password"
                   type="password"
                   className="h-9"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  value={formData.master_password}
+                  onChange={(e) => setFormData({ ...formData, master_password: e.target.value })}
                   placeholder="password"
                 />
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="group_name" className="text-sm">Group (Optional)</Label>
-                <Input
-                  id="group_name"
-                  className="h-9"
-                  value={formData.group_name}
-                  onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
-                  placeholder="dev, prod, test, etc."
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="metrics_endpoint" className="text-sm">Metrics Endpoint (Optional)</Label>
-                <Input
-                  id="metrics_endpoint"
-                  className="h-9"
-                  value={formData.metrics_endpoint}
-                  onChange={(e) => setFormData({ ...formData, metrics_endpoint: e.target.value })}
-                  placeholder="http://keycloak-ip:9000/metrics"
-                />
-                <p className="text-xs text-gray-500">
-                  Prometheus metrics endpoint URL (e.g., http://keycloak-ip:9000/metrics)
-                </p>
-              </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="group_name" className="text-sm">Group (Optional)</Label>
+                    <Input
+                      id="group_name"
+                      className="h-9"
+                      value={formData.group_name}
+                      onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
+                      placeholder="dev, prod, test, etc."
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="metrics_endpoint" className="text-sm">Metrics Endpoint (Optional)</Label>
+                    <Input
+                      id="metrics_endpoint"
+                      className="h-9"
+                      value={formData.metrics_endpoint}
+                      onChange={(e) => setFormData({ ...formData, metrics_endpoint: e.target.value })}
+                      placeholder="http://keycloak-ip:9000/metrics"
+                    />
+                    <p className="text-xs text-gray-500">
+                      Prometheus metrics endpoint URL (e.g., http://keycloak-ip:9000/metrics)
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-4">
+                  <div className="grid gap-4">
+                    <div className="grid gap-2">
+                      <Label htmlFor="discover_base_url" className="text-sm">Base URL</Label>
+                      <Input
+                        id="discover_base_url"
+                        className="h-9"
+                        value={discoverFormData.base_url}
+                        onChange={(e) => setDiscoverFormData({ ...discoverFormData, base_url: e.target.value })}
+                        placeholder="https://keycloak.example.com"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="discover_username" className="text-sm">Admin Username</Label>
+                      <Input
+                        id="discover_username"
+                        className="h-9"
+                        value={discoverFormData.username}
+                        onChange={(e) => setDiscoverFormData({ ...discoverFormData, username: e.target.value })}
+                        placeholder="admin"
+                      />
+                      <p className="text-xs text-gray-500">
+                        Master realm admin credentials required
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="discover_password" className="text-sm">Admin Password</Label>
+                      <Input
+                        id="discover_password"
+                        type="password"
+                        className="h-9"
+                        value={discoverFormData.password}
+                        onChange={(e) => setDiscoverFormData({ ...discoverFormData, password: e.target.value })}
+                        placeholder="password"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleDiscover}
+                      disabled={discovering || !discoverFormData.base_url || !discoverFormData.username || !discoverFormData.password}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-sm h-9"
+                    >
+                      {discovering ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          Discovering...
+                        </>
+                      ) : (
+                        <>
+                          <SearchIcon className="mr-1.5 h-4 w-4" />
+                          Discover Realms
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {discoveredRealms.length > 0 && (
+                    <div className="mt-6 border-t pt-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold">Discovered Realms ({discoveredRealms.length})</h3>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-7"
+                            onClick={() => {
+                              const allEnabled = discoveredRealms.filter(r => r.enabled).map(r => r.realm);
+                              setSelectedRealms(new Set(allEnabled));
+                            }}
+                          >
+                            Select All Enabled
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-7"
+                            onClick={() => setSelectedRealms(new Set())}
+                          >
+                            Clear Selection
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="max-h-[300px] overflow-y-auto space-y-2">
+                        {discoveredRealms.map((realm) => (
+                          <div
+                            key={realm.realm}
+                            className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                              selectedRealms.has(realm.realm)
+                                ? 'bg-blue-50 border-blue-300'
+                                : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                            }`}
+                            onClick={() => {
+                              const newSelected = new Set(selectedRealms);
+                              if (newSelected.has(realm.realm)) {
+                                newSelected.delete(realm.realm);
+                              } else {
+                                newSelected.add(realm.realm);
+                              }
+                              setSelectedRealms(newSelected);
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedRealms.has(realm.realm)}
+                              onChange={() => {}}
+                              className="h-4 w-4 text-blue-600 rounded"
+                            />
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <Shield className="h-4 w-4 text-gray-600" />
+                                <span className="text-sm font-medium">{realm.realm}</span>
+                                {!realm.enabled && (
+                                  <span className="text-xs px-2 py-0.5 bg-gray-200 text-gray-600 rounded">Disabled</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {selectedRealms.size > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <Button
+                            onClick={handleAddSelectedRealms}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white text-sm h-9"
+                          >
+                            <Plus className="mr-1.5 h-4 w-4" />
+                            Add {selectedRealms.size} Selected Realm{selectedRealms.size > 1 ? 's' : ''}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
+
             <DialogFooter>
-              <Button onClick={handleCreate} className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9">
-                Create
-              </Button>
+              {addMode === 'manual' ? (
+                <Button onClick={handleCreate} className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9">
+                  Create
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsDialogOpen(false);
+                    setDiscoveredRealms([]);
+                    setSelectedRealms(new Set());
+                    setDiscoverFormData({
+                      base_url: '',
+                      username: '',
+                      password: '',
+                    });
+                  }}
+                  className="text-sm h-9"
+                >
+                  Close
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1213,352 +1461,86 @@ export default function ClusterList() {
           );
         }
 
-        // List View - Similar nested structure
+        // List View - Table format
         const { nestedGroups: listNestedGroups, standaloneGroups: listStandaloneGroups, ungrouped: listUngrouped } = groupedClusters();
         const sortedListInstanceNames = Object.keys(listNestedGroups).sort();
         const sortedListStandaloneNames = Object.keys(listStandaloneGroups).sort();
         
+        // Collect all clusters for table view
+        const allClustersForTable: Cluster[] = [];
+        
+        // Add nested instance groups
+        sortedListInstanceNames.forEach((instanceName) => {
+          const instanceData = listNestedGroups[instanceName];
+          const allInstanceClusters = [
+            ...Object.values(instanceData.groups).flat(),
+            ...instanceData.ungrouped
+          ];
+          allClustersForTable.push(...allInstanceClusters);
+        });
+        
+        // Add standalone groups
+        sortedListStandaloneNames.forEach((groupName) => {
+          allClustersForTable.push(...listStandaloneGroups[groupName]);
+        });
+        
+        // Add ungrouped
+        allClustersForTable.push(...listUngrouped);
+        
         return (
           <div className="space-y-6">
-            {/* Nested instance groups */}
+            {/* Instance Headers */}
             {sortedListInstanceNames.map((instanceName) => {
               const instanceData = listNestedGroups[instanceName];
               const isInstanceExpanded = expandedGroups.has(instanceName);
-              const totalClusters = Object.values(instanceData.groups).flat().length + instanceData.ungrouped.length;
-              const sortedSubGroupNames = Object.keys(instanceData.groups).sort();
+              const allInstanceClusters = [
+                ...Object.values(instanceData.groups).flat(),
+                ...instanceData.ungrouped
+              ];
+              const totalClusters = allInstanceClusters.length;
               
               return (
-                <div key={instanceName} className="space-y-3">
-                  <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
-                    <button
-                      onClick={() => toggleGroup(instanceName)}
-                      className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
-                    >
-                      <Server className="h-4 w-4 text-blue-500" />
-                      <span>{instanceName}</span>
-                      <span className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded border border-blue-200">
-                        Instance
-                      </span>
-                      <span className="text-xs text-gray-500">({totalClusters})</span>
-                      {isInstanceExpanded ? (
-                        <ChevronDown className="h-4 w-4 text-gray-400" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      )}
-                    </button>
-                  </div>
-                  {isInstanceExpanded && (
-                    <div className="pl-4 border-l-2 border-gray-200 space-y-4">
-                      {/* Sub-groups by group_name */}
-                      {sortedSubGroupNames.map((groupName) => {
-                        const subGroupClusters = instanceData.groups[groupName];
-                        const subGroupKey = `${instanceName}:${groupName}`;
-                        const isSubGroupExpanded = expandedGroups.has(subGroupKey);
-                        
-                        return (
-                          <div key={subGroupKey} className="space-y-3">
-                            <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
-                              <button
-                                onClick={() => toggleGroup(subGroupKey)}
-                                className="flex items-center gap-2 text-xs font-semibold text-gray-600 hover:text-gray-800 transition-colors"
-                              >
-                                <Folder className="h-3.5 w-3.5 text-gray-400" />
-                                <span>{groupName}</span>
-                                <span className="text-xs text-gray-500">({subGroupClusters.length})</span>
-                                {isSubGroupExpanded ? (
-                                  <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
-                                ) : (
-                                  <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
-                                )}
-                              </button>
-                            </div>
-                            {isSubGroupExpanded && (
-                              <div className="space-y-3 pl-4 border-l-2 border-gray-200">
-                                {subGroupClusters.map((cluster: Cluster) => {
-                                  const clusterMetrics = getClusterMetrics(cluster.id);
-                                  const health = healthStatuses[cluster.id];
-                                  const isHealthy = health?.status === 'healthy';
-                                  const isError = health?.status === 'error' || health?.status === 'unhealthy';
-                                  
-                                  return (
-                                    <Card 
-                                      key={cluster.id} 
-                                      className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
-                                        isHealthy 
-                                          ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
-                                          : isError 
-                                          ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
-                                          : 'border-gray-300 bg-white'
-                                      }`}
-                                    >
-                                      <div className={`absolute top-0 left-0 bottom-0 w-1 ${
-                                        isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
-                                      }`} />
-                                      
-                                      <CardContent className="p-4 pl-6">
-                                        <div className="flex items-center justify-between">
-                                          <div className="flex items-center gap-4 flex-1 min-w-0">
-                                            <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
-                                              isHealthy 
-                                                ? 'bg-green-500' 
-                                                : isError 
-                                                ? 'bg-red-500' 
-                                                : 'bg-gray-400'
-                                            }`}>
-                                              <Shield className="h-6 w-6 text-white" />
-                                            </div>
-                                            
-                                            <div className="flex-1 min-w-0">
-                                              <div className="flex items-center gap-3 mb-1">
-                                                <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
-                                                {health && (
-                                                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
-                                                    isHealthy 
-                                                      ? 'bg-green-100 text-green-800' 
-                                                      : 'bg-red-100 text-red-800'
-                                                  }`}>
-                                                    {isHealthy ? (
-                                                      <>
-                                                        <CheckCircle2 className="h-3.5 w-3.5" />
-                                                        <span>Online</span>
-                                                      </>
-                                                    ) : (
-                                                      <>
-                                                        <AlertCircle className="h-3.5 w-3.5" />
-                                                        <span>Offline</span>
-                                                      </>
-                                                    )}
-                                                  </span>
-                                                )}
-                                              </div>
-                                              <div className="flex items-center gap-4 text-sm text-gray-600">
-                                                <div className="flex items-center gap-1.5">
-                                                  <Server className="h-4 w-4" />
-                                                  <span className="truncate">{cluster.base_url}</span>
-                                                </div>
-                                                {cluster.realm && (
-                                                  <div className="flex items-center gap-1.5">
-                                                    <Shield className="h-4 w-4" />
-                                                    <span>Realm: {cluster.realm}</span>
-                                                  </div>
-                                                )}
-                                              </div>
-                                            </div>
-                                          </div>
-                                          
-                                          <div className="flex items-center gap-2">
-                                            <Button
-                                              size="sm"
-                                              className={`text-xs h-9 font-semibold transition-all ${
-                                                isHealthy 
-                                                  ? 'bg-green-600 hover:bg-green-700 text-white' 
-                                                  : isError
-                                                  ? 'bg-red-600 hover:bg-red-700 text-white'
-                                                  : 'bg-[#4a5568] hover:bg-[#374151] text-white'
-                                              }`}
-                                              onClick={() => navigate(`/clusters/${cluster.id}`)}
-                                            >
-                                              <Eye className="h-3.5 w-3.5 mr-1.5" />
-                                              View
-                                            </Button>
-                                            <TooltipProvider>
-                                              <Tooltip>
-                                                <TooltipTrigger asChild>
-                                                  <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
-                                                    onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
-                                                  >
-                                                    <Key className="h-3.5 w-3.5" />
-                                                  </Button>
-                                                </TooltipTrigger>
-                                                <TooltipContent>
-                                                  <p className="font-medium">Token Inspector</p>
-                                                  <p className="text-xs mt-1 opacity-90">
-                                                    Get and inspect access token for a Keycloak user
-                                                  </p>
-                                                </TooltipContent>
-                                              </Tooltip>
-                                            </TooltipProvider>
-                                            {isAdmin && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                                                className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                                                onClick={() => handleEdit(cluster)}
-                                              >
-                                                <Edit className="h-3.5 w-3.5 mr-1.5" />
-                                                Edit
-                                              </Button>
-                                            )}
-                                            {isAdmin && (
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
-                        onClick={() => handleDelete(cluster.id)}
+                <div key={instanceName} className="space-y-4">
+                  <Card className="border-2 border-blue-200 bg-gradient-to-r from-blue-50 to-white shadow-md">
+                    <CardContent className="p-4">
+                      <button
+                        onClick={() => toggleGroup(instanceName)}
+                        className="w-full flex items-center justify-between hover:opacity-80 transition-opacity"
                       >
-                                                <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
-                                          </div>
-                  </div>
-                </CardContent>
-              </Card>
-                );
-              })}
-                              </div>
-                            )}
-            </div>
-          );
-                      })}
-                      
-                      {/* Ungrouped clusters within instance */}
-                      {instanceData.ungrouped.length > 0 && (
-                        <div className="space-y-3">
-                          <div className="text-xs font-semibold text-gray-500 pb-2 border-b border-gray-200">
-                            Other ({instanceData.ungrouped.length})
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-blue-500 flex items-center justify-center shadow-sm">
+                            <Server className="h-5 w-5 text-white" />
                           </div>
-                          <div className="space-y-3 pl-4 border-l-2 border-gray-200">
-                            {instanceData.ungrouped.map((cluster: Cluster) => {
-                              const clusterMetrics = getClusterMetrics(cluster.id);
-                              const health = healthStatuses[cluster.id];
-                              const isHealthy = health?.status === 'healthy';
-                              const isError = health?.status === 'error' || health?.status === 'unhealthy';
-                              
-        return (
-                                <Card 
-                                  key={cluster.id} 
-                                  className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
-                                    isHealthy 
-                                      ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
-                                      : isError 
-                                      ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
-                                      : 'border-gray-300 bg-white'
-                                  }`}
-                                >
-                                  <div className={`absolute top-0 left-0 bottom-0 w-1 ${
-                                    isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
-                                  }`} />
-                                  
-                                  <CardContent className="p-4 pl-6">
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-4 flex-1 min-w-0">
-                                        <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
-                                          isHealthy 
-                                            ? 'bg-green-500' 
-                                            : isError 
-                                            ? 'bg-red-500' 
-                                            : 'bg-gray-400'
-                                        }`}>
-                                          <Shield className="h-6 w-6 text-white" />
-                                        </div>
-                                        
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-center gap-3 mb-1">
-                                            <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
-                                            {health && (
-                                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
-                                                isHealthy 
-                                                  ? 'bg-green-100 text-green-800' 
-                                                  : 'bg-red-100 text-red-800'
-                                              }`}>
-                                                {isHealthy ? (
-                                                  <>
-                                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                                    <span>Online</span>
-                                                  </>
-                                                ) : (
-                                                  <>
-                                                    <AlertCircle className="h-3.5 w-3.5" />
-                                                    <span>Offline</span>
-                                                  </>
-                                                )}
-                                              </span>
-                                            )}
-                                          </div>
-                                          <div className="flex items-center gap-4 text-sm text-gray-600">
-                                            <div className="flex items-center gap-1.5">
-                                              <Server className="h-4 w-4" />
-                                              <span className="truncate">{cluster.base_url}</span>
-                                            </div>
-                                            {cluster.realm && (
-                                              <div className="flex items-center gap-1.5">
-                                                <Shield className="h-4 w-4" />
-                                                <span>Realm: {cluster.realm}</span>
-                                              </div>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                      
-                                      <div className="flex items-center gap-2">
-                                        <Button
-                                          size="sm"
-                                          className={`text-xs h-9 font-semibold transition-all ${
-                                            isHealthy 
-                                              ? 'bg-green-600 hover:bg-green-700 text-white' 
-                                              : isError
-                                              ? 'bg-red-600 hover:bg-red-700 text-white'
-                                              : 'bg-[#4a5568] hover:bg-[#374151] text-white'
-                                          }`}
-                                          onClick={() => navigate(`/clusters/${cluster.id}`)}
-                                        >
-                                          <Eye className="h-3.5 w-3.5 mr-1.5" />
-                                          View
-                                        </Button>
-                                        <TooltipProvider>
-                                          <Tooltip>
-                                            <TooltipTrigger asChild>
-                                              <Button
-                                                variant="outline"
-                                                size="sm"
-                                                className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
-                                                onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
-                                              >
-                                                <Key className="h-3.5 w-3.5" />
-                                              </Button>
-                                            </TooltipTrigger>
-                                            <TooltipContent>
-                                              <p className="font-medium">Token Inspector</p>
-                                              <p className="text-xs mt-1 opacity-90">
-                                                Get and inspect access token for a Keycloak user
-                                              </p>
-                                            </TooltipContent>
-                                          </Tooltip>
-                                        </TooltipProvider>
-                                        {isAdmin && (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                                            onClick={() => handleEdit(cluster)}
-                                          >
-                                            <Edit className="h-3.5 w-3.5 mr-1.5" />
-                                            Edit
-                                          </Button>
-                                        )}
-                                        {isAdmin && (
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
-                                            onClick={() => handleDelete(cluster.id)}
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                          </Button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </CardContent>
-                                </Card>
-                              );
-                            })}
+                          <div className="text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-gray-700">Keycloak Instance:</span>
+                              <span className="text-base font-bold text-gray-900">{instanceName}</span>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {totalClusters} {totalClusters === 1 ? 'realm' : 'realms'}
+                            </div>
                           </div>
                         </div>
-                      )}
-                    </div>
+                        {isInstanceExpanded ? (
+                          <ChevronDown className="h-5 w-5 text-gray-400" />
+                        ) : (
+                          <ChevronRight className="h-5 w-5 text-gray-400" />
+                        )}
+                      </button>
+                    </CardContent>
+                  </Card>
+                  
+                  {isInstanceExpanded && (
+                    <RealmTable
+                      clusters={allInstanceClusters}
+                      healthStatuses={healthStatuses}
+                      metrics={metrics}
+                      loadingMetrics={loadingMetrics}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                      onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                      getClusterMetrics={getClusterMetrics}
+                    />
                   )}
                 </div>
               );
@@ -1570,159 +1552,47 @@ export default function ClusterList() {
               const isGroupExpanded = expandedGroups.has(groupName);
               
               return (
-                <div key={groupName} className="space-y-3">
-                  <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
-                    <button
-                      onClick={() => toggleGroup(groupName)}
-                      className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
-                    >
-                      <Folder className="h-4 w-4 text-gray-500" />
-                      <span>{groupName}</span>
-                      <span className="text-xs text-gray-500">({groupClusters.length})</span>
-                      {isGroupExpanded ? (
-                        <ChevronDown className="h-4 w-4 text-gray-400" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-gray-400" />
-                      )}
-                    </button>
-                  </div>
+                <div key={groupName} className="space-y-4">
+                  <Card className="border-2 border-purple-200 bg-gradient-to-r from-purple-50 to-white shadow-md">
+                    <CardContent className="p-4">
+                      <button
+                        onClick={() => toggleGroup(groupName)}
+                        className="w-full flex items-center justify-between hover:opacity-80 transition-opacity"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-purple-500 flex items-center justify-center shadow-sm">
+                            <Folder className="h-5 w-5 text-white" />
+                          </div>
+                          <div className="text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-gray-700">Group:</span>
+                              <span className="text-base font-bold text-gray-900">{groupName}</span>
+                            </div>
+                            <div className="text-xs text-gray-500 mt-0.5">
+                              {groupClusters.length} {groupClusters.length === 1 ? 'realm' : 'realms'}
+                            </div>
+                          </div>
+                        </div>
+                        {isGroupExpanded ? (
+                          <ChevronDown className="h-5 w-5 text-gray-400" />
+                        ) : (
+                          <ChevronRight className="h-5 w-5 text-gray-400" />
+                        )}
+                      </button>
+                    </CardContent>
+                  </Card>
+                  
                   {isGroupExpanded && (
-                    <div className="space-y-3 pl-4 border-l-2 border-gray-200">
-                      {groupClusters.map((cluster: Cluster) => {
-                        const clusterMetrics = getClusterMetrics(cluster.id);
-                        const health = healthStatuses[cluster.id];
-                        const isHealthy = health?.status === 'healthy';
-                        const isError = health?.status === 'error' || health?.status === 'unhealthy';
-                        
-                        return (
-                          <Card 
-                            key={cluster.id} 
-                            className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
-                              isHealthy 
-                                ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
-                                : isError 
-                                ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
-                                : 'border-gray-300 bg-white'
-                            }`}
-                          >
-                            <div className={`absolute top-0 left-0 bottom-0 w-1 ${
-                              isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
-                            }`} />
-                            
-                            <CardContent className="p-4 pl-6">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-4 flex-1 min-w-0">
-                                  <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
-                                    isHealthy 
-                                      ? 'bg-green-500' 
-                                      : isError 
-                                      ? 'bg-red-500' 
-                                      : 'bg-gray-400'
-                                  }`}>
-                                    <Shield className="h-6 w-6 text-white" />
-                                  </div>
-                                  
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-3 mb-1">
-                                      <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
-                                      {health && (
-                                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
-                                          isHealthy 
-                                            ? 'bg-green-100 text-green-800' 
-                                            : 'bg-red-100 text-red-800'
-                                        }`}>
-                                          {isHealthy ? (
-                                            <>
-                                              <CheckCircle2 className="h-3.5 w-3.5" />
-                                              <span>Online</span>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <AlertCircle className="h-3.5 w-3.5" />
-                                              <span>Offline</span>
-                                            </>
-                                          )}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center gap-4 text-sm text-gray-600">
-                                      <div className="flex items-center gap-1.5">
-                                        <Server className="h-4 w-4" />
-                                        <span className="truncate">{cluster.base_url}</span>
-                                      </div>
-                                      {cluster.realm && (
-                                        <div className="flex items-center gap-1.5">
-                                          <Shield className="h-4 w-4" />
-                                          <span>Realm: {cluster.realm}</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                                
-                                <div className="flex items-center gap-2">
-                                  <Button
-                                    size="sm"
-                                    className={`text-xs h-9 font-semibold transition-all ${
-                                      isHealthy 
-                                        ? 'bg-green-600 hover:bg-green-700 text-white' 
-                                        : isError
-                                        ? 'bg-red-600 hover:bg-red-700 text-white'
-                                        : 'bg-[#4a5568] hover:bg-[#374151] text-white'
-                                    }`}
-                                    onClick={() => navigate(`/clusters/${cluster.id}`)}
-                                  >
-                                    <Eye className="h-3.5 w-3.5 mr-1.5" />
-                                    View
-                                  </Button>
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
-                                          onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
-                                        >
-                                          <Key className="h-3.5 w-3.5" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p className="font-medium">Token Inspector</p>
-                                        <p className="text-xs mt-1 opacity-90">
-                                          Get and inspect access token for a Keycloak user
-                                        </p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
-                                  {isAdmin && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                                      onClick={() => handleEdit(cluster)}
-                                    >
-                                      <Edit className="h-3.5 w-3.5 mr-1.5" />
-                                      Edit
-                                    </Button>
-                                  )}
-                                  {isAdmin && (
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
-                                      onClick={() => handleDelete(cluster.id)}
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </Button>
-                                  )}
-                                </div>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        );
-                      })}
-                    </div>
+                    <RealmTable
+                      clusters={groupClusters}
+                      healthStatuses={healthStatuses}
+                      metrics={metrics}
+                      loadingMetrics={loadingMetrics}
+                      onDelete={handleDelete}
+                      onEdit={handleEdit}
+                      onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                      getClusterMetrics={getClusterMetrics}
+                    />
                   )}
                 </div>
               );
@@ -1730,150 +1600,37 @@ export default function ClusterList() {
             
             {/* Ungrouped clusters */}
             {listUngrouped.length > 0 && (
-          <div className="space-y-3">
-                <div className="pb-2 border-b border-gray-200">
-                  <div className="text-sm font-semibold text-gray-700">Other Clusters</div>
-                </div>
-                <div className="space-y-3">
-                  {listUngrouped.map((cluster: Cluster) => {
-                      const clusterMetrics = getClusterMetrics(cluster.id);
-                      const health = healthStatuses[cluster.id];
-                      const isHealthy = health?.status === 'healthy';
-                      const isError = health?.status === 'error' || health?.status === 'unhealthy';
-                      
-                      return (
-                        <Card 
-                          key={cluster.id} 
-                          className={`border-2 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden ${
-                            isHealthy 
-                              ? 'border-green-400 bg-gradient-to-r from-green-50 to-white' 
-                              : isError 
-                              ? 'border-red-400 bg-gradient-to-r from-red-50 to-white' 
-                              : 'border-gray-300 bg-white'
-                          }`}
-                        >
-                          <div className={`absolute top-0 left-0 bottom-0 w-1 ${
-                            isHealthy ? 'bg-green-500' : isError ? 'bg-red-500' : 'bg-gray-400'
-                          }`} />
-                          
-                          <CardContent className="p-4 pl-6">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-4 flex-1 min-w-0">
-                                <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm ${
-                                  isHealthy 
-                                    ? 'bg-green-500' 
-                                    : isError 
-                                    ? 'bg-red-500' 
-                                    : 'bg-gray-400'
-                                }`}>
-                                  <Shield className="h-6 w-6 text-white" />
-                                </div>
-                                
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-3 mb-1">
-                                    <h3 className="text-lg font-bold text-gray-900">{cluster.name}</h3>
-                                    {health && (
-                                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
-                                        isHealthy 
-                                          ? 'bg-green-100 text-green-800' 
-                                          : 'bg-red-100 text-red-800'
-                                      }`}>
-                                        {isHealthy ? (
-                                          <>
-                                            <CheckCircle2 className="h-3.5 w-3.5" />
-                                            <span>Online</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <AlertCircle className="h-3.5 w-3.5" />
-                                            <span>Offline</span>
-                                          </>
-                                        )}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-4 text-sm text-gray-600">
-                                    <div className="flex items-center gap-1.5">
-                                      <Server className="h-4 w-4" />
-                                      <span className="truncate">{cluster.base_url}</span>
-                                    </div>
-                                    {cluster.realm && (
-                                      <div className="flex items-center gap-1.5">
-                                        <Shield className="h-4 w-4" />
-                                        <span>Realm: {cluster.realm}</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  className={`text-xs h-9 font-semibold transition-all ${
-                                    isHealthy 
-                                      ? 'bg-green-600 hover:bg-green-700 text-white' 
-                                      : isError
-                                      ? 'bg-red-600 hover:bg-red-700 text-white'
-                                      : 'bg-[#4a5568] hover:bg-[#374151] text-white'
-                                  }`}
-                                  onClick={() => navigate(`/clusters/${cluster.id}`)}
-                                >
-                                  <Eye className="h-3.5 w-3.5 mr-1.5" />
-                                  View
-                                </Button>
-                                <TooltipProvider>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="text-xs h-9 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300 hover:border-blue-400 font-medium"
-                                        onClick={() => setTokenInspectorDialog({ open: true, clusterId: cluster.id })}
-                                      >
-                                        <Key className="h-3.5 w-3.5" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p className="font-medium">Token Inspector</p>
-                                      <p className="text-xs mt-1 opacity-90">
-                                        Get and inspect access token for a Keycloak user
-                                      </p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </TooltipProvider>
-                                {isAdmin && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-xs h-9 px-3 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                                    onClick={() => handleEdit(cluster)}
-                                  >
-                                    <Edit className="h-3.5 w-3.5 mr-1.5" />
-                                    Edit
-                                  </Button>
-                                )}
-                                {isAdmin && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="text-xs h-9 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
-                                    onClick={() => handleDelete(cluster.id)}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
+              <div className="space-y-4">
+                <Card className="border-2 border-gray-200 bg-gradient-to-r from-gray-50 to-white shadow-md">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-gray-500 flex items-center justify-center shadow-sm">
+                        <Shield className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="text-left">
+                        <div className="text-sm font-semibold text-gray-700">Other Clusters</div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {listUngrouped.length} {listUngrouped.length === 1 ? 'realm' : 'realms'}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                
+                <RealmTable
+                  clusters={listUngrouped}
+                  healthStatuses={healthStatuses}
+                  metrics={metrics}
+                  loadingMetrics={loadingMetrics}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                  getClusterMetrics={getClusterMetrics}
+                />
+              </div>
+            )}
+          </div>
+        );
         })()}
 
       {/* Detail Dialog */}
@@ -2035,23 +1792,26 @@ export default function ClusterList() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="edit_username" className="text-sm">Username</Label>
+              <Label htmlFor="edit_master_username" className="text-sm">Master Realm Admin Username</Label>
               <Input
-                id="edit_username"
+                id="edit_master_username"
                 className="h-9"
-                value={editFormData.username}
-                onChange={(e) => setEditFormData({ ...editFormData, username: e.target.value })}
+                value={editFormData.master_username}
+                onChange={(e) => setEditFormData({ ...editFormData, master_username: e.target.value })}
                 placeholder="admin"
               />
+              <p className="text-xs text-gray-500">
+                Required only if realm or base URL changes (used to re-setup service account)
+              </p>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="edit_password" className="text-sm">Password</Label>
+              <Label htmlFor="edit_master_password" className="text-sm">Master Realm Admin Password</Label>
               <Input
-                id="edit_password"
+                id="edit_master_password"
                 type="password"
                 className="h-9"
-                value={editFormData.password}
-                onChange={(e) => setEditFormData({ ...editFormData, password: e.target.value })}
+                value={editFormData.master_password}
+                onChange={(e) => setEditFormData({ ...editFormData, master_password: e.target.value })}
                 placeholder="password"
               />
             </div>
@@ -2088,8 +1848,8 @@ export default function ClusterList() {
                   name: '',
                   base_url: '',
                   realm: 'master',
-                  username: '',
-                  password: '',
+                  master_username: '',
+                  master_password: '',
                   group_name: '',
                   metrics_endpoint: '',
                 });

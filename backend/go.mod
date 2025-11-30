@@ -8,6 +8,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	golang.org/x/crypto v0.19.0
+	github.com/go-ldap/ldap/v3 v3.4.8
 )
 
 require (

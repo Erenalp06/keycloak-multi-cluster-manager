@@ -52,8 +52,9 @@ type RegisterRequest struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username" validate:"required"`
-	Password string `json:"password" validate:"required"`
+	Username  string `json:"username" validate:"required"`
+	Password  string `json:"password" validate:"required"`
+	AuthType  string `json:"auth_type,omitempty"` // "local" or "ldap", empty means auto (try LDAP first, fallback to local)
 }
 
 type AuthResponse struct {

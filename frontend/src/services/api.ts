@@ -234,6 +234,7 @@ export interface RegisterRequest {
 export interface LoginRequest {
   username: string;
   password: string;
+  auth_type?: 'local' | 'ldap'; // Optional: if not provided, auto mode (try LDAP first if enabled)
 }
 
 export interface AuthResponse {
@@ -1060,6 +1061,119 @@ export const exportImportApi = {
       const error = await response.json();
       throw new Error(error.error || 'Failed to import clients');
     }
+  },
+};
+
+// LDAP Configuration interfaces
+export interface CertificateInfo {
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before: string;
+  not_after: string;
+  dns_names?: string[];
+  ip_addresses?: string[];
+  signature_algorithm: string;
+  public_key_algorithm: string;
+}
+
+export interface LDAPConfig {
+  id: number;
+  enabled: boolean;
+  server_url: string;
+  bind_dn: string;
+  user_search_base: string;
+  user_search_filter: string;
+  group_search_base?: string;
+  group_search_filter?: string;
+  use_ssl: boolean;
+  use_tls: boolean;
+  skip_verify: boolean;
+  timeout_seconds: number;
+  certificate_pem?: string;
+  certificate_info?: CertificateInfo;
+  certificate_fingerprint?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpdateLDAPConfigRequest {
+  enabled: boolean;
+  server_url: string;
+  bind_dn: string;
+  bind_password?: string;
+  user_search_base: string;
+  user_search_filter?: string;
+  group_search_base?: string;
+  group_search_filter?: string;
+  use_ssl: boolean;
+  use_tls: boolean;
+  skip_verify: boolean;
+  timeout_seconds: number;
+}
+
+export const ldapConfigApi = {
+  get: async (): Promise<LDAPConfig> => {
+    // Public endpoint - no auth required
+    const response = await fetch(`${API_URL}/ldap-config`, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get LDAP configuration');
+    }
+    return response.json();
+  },
+
+  update: async (data: UpdateLDAPConfigRequest): Promise<LDAPConfig> => {
+    const response = await fetch(`${API_URL}/ldap-config`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update LDAP configuration');
+    }
+    return response.json();
+  },
+
+  testConnection: async (): Promise<{ success: boolean; message?: string; error?: string }> => {
+    const response = await fetch(`${API_URL}/ldap-config/test`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to test LDAP connection');
+    }
+    return data;
+  },
+
+  fetchCertificate: async (): Promise<{ success: boolean; message?: string; certificate?: CertificateInfo; error?: string }> => {
+    const response = await fetch(`${API_URL}/ldap-config/fetch-certificate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to fetch certificate');
+    }
+    return data;
+  },
+
+  deleteCertificate: async (): Promise<{ success: boolean; message?: string; error?: string }> => {
+    const response = await fetch(`${API_URL}/ldap-config/certificate`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to delete certificate');
+    }
+    return data;
   },
 };
 

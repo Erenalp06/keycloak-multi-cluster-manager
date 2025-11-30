@@ -27,11 +27,15 @@ func main() {
 	userRepo := postgres.NewUserRepository(db)
 	permissionRepo := postgres.NewPermissionRepository(db)
 	appRoleRepo := postgres.NewAppRoleRepository(db)
+	ldapConfigRepo := postgres.NewLDAPConfigRepository(db)
 	
 	// Initialize default admin user if it doesn't exist
 	if err := service.InitDefaultAdmin(userRepo); err != nil {
 		log.Printf("Warning: Failed to initialize default admin user: %v", err)
 	}
+	
+	// Initialize certificate service
+	certService := service.NewCertificateService("")
 	
 	// Initialize services
 	clusterService := service.NewClusterService(clusterRepo)
@@ -39,9 +43,10 @@ func main() {
 	diffService := service.NewDiffService(roleService, clusterService)
 	syncService := service.NewSyncService(clusterRepo)
 	exportImportService := service.NewExportImportService(clusterRepo)
-	authService := service.NewAuthService(userRepo, appRoleRepo)
+	authService := service.NewAuthService(userRepo, appRoleRepo, ldapConfigRepo, certService)
 	userService := service.NewUserService(userRepo, appRoleRepo)
 	appRoleService := service.NewAppRoleService(appRoleRepo, permissionRepo)
+	ldapConfigService := service.NewLDAPConfigService(ldapConfigRepo, certService)
 	
 	// Initialize handlers
 	clusterHandler := handler.NewClusterHandler(clusterService)
@@ -52,6 +57,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(authService)
 	userHandler := handler.NewUserHandler(userService)
 	appRoleHandler := handler.NewAppRoleHandler(appRoleService)
+	ldapConfigHandler := handler.NewLDAPConfigHandler(ldapConfigService)
 	
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -93,6 +99,10 @@ func main() {
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Get("/me", middleware.AuthMiddleware(authService), authHandler.Me)
+	
+	// LDAP configuration - GET endpoint is public (for login page)
+	ldapConfigPublic := api.Group("/ldap-config")
+	ldapConfigPublic.Get("/", ldapConfigHandler.Get)
 	
 	// Protected routes
 	protected := api.Group("", middleware.AuthMiddleware(authService))
@@ -179,6 +189,13 @@ func main() {
 	adminRoles.Delete("/:id", appRoleHandler.DeleteRole)
 	adminRoles.Post("/users/:user_id/assign", appRoleHandler.AssignRolesToUser)
 	adminRoles.Get("/users/:user_id", appRoleHandler.GetUserRoles)
+	
+	// LDAP configuration routes - update and test require admin
+	ldapConfig := protected.Group("/ldap-config", middleware.AdminMiddleware(appRoleService))
+	ldapConfig.Put("/", ldapConfigHandler.Update)
+	ldapConfig.Post("/test", ldapConfigHandler.TestConnection)
+	ldapConfig.Post("/fetch-certificate", ldapConfigHandler.FetchCertificate)
+	ldapConfig.Delete("/certificate", ldapConfigHandler.DeleteCertificate)
 	
 	// Start server
 	port := os.Getenv("SERVER_PORT")

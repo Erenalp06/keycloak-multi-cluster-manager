@@ -1,7 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { AlertCircle, User, Lock, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, User, Lock, CheckCircle2, Key } from 'lucide-react';
+import { ldapConfigApi } from '../services/api';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -10,9 +18,29 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [ldapEnabled, setLdapEnabled] = useState(false);
+  const [authType, setAuthType] = useState<'local' | 'ldap'>('local');
   const { login } = useAuth();
   const navigate = useNavigate();
   const dataStreamsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Check if LDAP is enabled
+  useEffect(() => {
+    ldapConfigApi.get()
+      .then(config => {
+        console.log('LDAP config loaded:', config);
+        setLdapEnabled(config.enabled);
+        // If LDAP is enabled, default to LDAP auth type
+        if (config.enabled) {
+          setAuthType('ldap');
+        }
+      })
+      .catch((err) => {
+        // If error (e.g., 401, 403, or network error), assume LDAP is disabled
+        console.error('LDAP config check failed:', err);
+        setLdapEnabled(false);
+      });
+  }, []);
 
   // Data streams animation
   useEffect(() => {
@@ -41,7 +69,10 @@ export default function Login() {
     setIsAuthenticated(false);
 
     try {
-      await login(username, password);
+      // Always send auth_type if LDAP is enabled, otherwise send undefined (will use local)
+      const selectedAuthType = ldapEnabled ? authType : undefined;
+      console.log('Logging in with auth_type:', selectedAuthType);
+      await login(username, password, selectedAuthType);
       setIsAuthenticated(true);
       setTimeout(() => {
         navigate('/');
@@ -148,6 +179,44 @@ export default function Login() {
             <h1 className="text-[28px] font-bold text-[#0a0e27] mb-2 tracking-tight">Welcome Back</h1>
             <p className="text-[15px] text-slate-500">Enter your credentials to access your account</p>
           </div>
+
+          {/* Authentication Type Selection (only if LDAP is enabled) */}
+          {ldapEnabled && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-900 mb-2">Authentication Type</label>
+              <Select value={authType} onValueChange={(value) => setAuthType(value as 'local' | 'ldap')}>
+                <SelectTrigger className="w-full h-12 border-[1.5px] border-slate-200 rounded-lg text-[15px] bg-white focus:border-[#1a1f3a] focus:ring-4 focus:ring-[#1a1f3a]/8">
+                  <div className="flex items-center gap-2 flex-1">
+                    {authType === 'local' ? (
+                      <>
+                        <User className="h-4 w-4 text-slate-600" />
+                        <SelectValue>Local Account</SelectValue>
+                      </>
+                    ) : (
+                      <>
+                        <Key className="h-4 w-4 text-blue-600" />
+                        <SelectValue>LDAP</SelectValue>
+                      </>
+                    )}
+                  </div>
+                </SelectTrigger>
+                <SelectContent className="bg-white border border-slate-200 shadow-lg rounded-lg">
+                  <SelectItem value="local" className="cursor-pointer focus:bg-slate-50">
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-slate-600" />
+                      <span>Local Account</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="ldap" className="cursor-pointer focus:bg-slate-50">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-4 w-4 text-blue-600" />
+                      <span>LDAP</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-6">

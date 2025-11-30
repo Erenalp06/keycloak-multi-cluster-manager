@@ -5,7 +5,7 @@ interface AuthContextType {
   user: AppUser | null;
   token: string | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, authType?: 'local' | 'ldap') => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
@@ -42,8 +42,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, []);
 
-  const login = async (username: string, password: string) => {
-    const response = await authApi.login({ username, password });
+  const login = async (username: string, password: string, authType?: 'local' | 'ldap') => {
+    const response = await authApi.login({ username, password, auth_type: authType });
     localStorage.setItem('authToken', response.token);
     setToken(response.token);
     setUser(response.user);

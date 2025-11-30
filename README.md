@@ -1,6 +1,6 @@
 # Keycloak Multi-Manage MVP
 
-**Version: 1.0.3**
+**Version: 1.0.4**
 
 <img width="2554" height="1304" alt="image" src="https://github.com/user-attachments/assets/4ccd1955-00ca-4968-a08d-bb1c05ee4049" />
 
@@ -13,6 +13,8 @@
 - **Health Check**: Cluster'ların sağlık durumunu kontrol etme
 - **Role Yönetimi**: Bir cluster'daki rollerin görüntülenmesi
 - **Role Diff**: İki cluster arasındaki roller için fark analizi (kaynakta var, hedefte yok)
+- **LDAP/LDAPS Authentication**: Active Directory ve LDAP sunucuları ile kimlik doğrulama
+- **Sertifika Yönetimi**: AD sunucusundan otomatik sertifika alma ve trust store yönetimi
 
 ## Teknolojiler
 
@@ -94,6 +96,26 @@ REACT_APP_API_URL=https://192.168.1.105/api
 4. "Role Diff" sayfasından iki cluster arasındaki farkları karşılaştırın
 
 ## Changelog
+
+### Version 1.0.4 (2025-01-XX)
+
+**Yeni Özellikler:**
+- ✅ LDAP/LDAPS authentication provider eklendi
+- ✅ Active Directory (AD) desteği ile LDAP girişi
+- ✅ Sertifika yönetimi: AD sunucusundan otomatik sertifika alma ve kaydetme
+- ✅ Login ekranında authentication type seçimi (Local/LDAP)
+- ✅ LDAP kullanıcıları için otomatik local user provisioning
+- ✅ Settings sayfasında LDAP yapılandırması ve sertifika yönetimi
+- ✅ Radix UI Select component ile temaya uygun combobox
+
+**Değişiklikler:**
+- 🔄 Login ekranında radio button yerine combobox kullanılıyor
+- 🔄 LDAP bağlantıları için sertifika trust store desteği
+- 🔄 Sertifikalar `/opt/mcm/certs/` klasörüne kaydediliyor
+
+**Düzeltmeler:**
+- 🐛 LDAP kullanıcıları için role assignment sorunu düzeltildi
+- 🐛 Permission hataları düzeltildi (403 Forbidden)
 
 ### Version 1.0.3 (2025-11-29)
 

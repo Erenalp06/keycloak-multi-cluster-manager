@@ -10,7 +10,21 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { Search, CheckCircle2, XCircle, ArrowRight, Key, Building2, Users, Network, AlertCircle, ArrowLeftRight, ArrowRight as ArrowRightIcon, Folder, ToggleLeft, ToggleRight, ChevronDown, ChevronRight, ArrowDownToLine, Loader2 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Search, CheckCircle2, XCircle, ArrowRight, Key, Building2, Users, Network, AlertCircle, ArrowLeftRight, ArrowRight as ArrowRightIcon, Folder, ToggleLeft, ToggleRight, ChevronDown, ChevronRight, ArrowDownToLine, Loader2, Info } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 type TabType = 'summary' | 'roles' | 'clients' | 'groups' | 'users';
@@ -26,6 +40,17 @@ export default function RoleDiff() {
   const [loading, setLoading] = useState(true);
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  const [syncConfirmDialog, setSyncConfirmDialog] = useState<{
+    open: boolean;
+    type: 'role' | 'client' | 'group' | 'user' | null;
+    identifier: string;
+    name: string;
+  }>({
+    open: false,
+    type: null,
+    identifier: '',
+    name: '',
+  });
 
   // Roles
   const [roleDiffs, setRoleDiffs] = useState<RoleDiffType[]>([]);
@@ -227,12 +252,24 @@ export default function RoleDiff() {
     return clusters.filter(c => c.group_name === groupName);
   };
 
-  const handleSync = async (type: 'role' | 'client' | 'group' | 'user', identifier: string) => {
+  const handleSyncClick = (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => {
     if (!sourceId || !destinationId) {
       alert('Please select both source and destination clusters');
       return;
     }
+    setSyncConfirmDialog({
+      open: true,
+      type,
+      identifier,
+      name,
+    });
+  };
 
+  const handleSyncConfirm = async () => {
+    const { type, identifier } = syncConfirmDialog;
+    if (!type || !sourceId || !destinationId) return;
+
+    setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' });
     const syncKey = `${type}-${identifier}`;
     setSyncing(prev => ({ ...prev, [syncKey]: true }));
 
@@ -500,7 +537,7 @@ export default function RoleDiff() {
           destinationName={getDestinationClusterName()}
           getRoleStatus={getRoleStatus}
           twoWay={twoWayComparison}
-          handleSync={handleSync}
+          handleSync={handleSyncClick}
           syncing={syncing}
         />
       ) : activeTab === 'clients' ? (
@@ -512,7 +549,7 @@ export default function RoleDiff() {
           destinationName={getDestinationClusterName()}
           getClientStatus={getClientStatus}
           twoWay={twoWayComparison}
-          handleSync={handleSync}
+          handleSync={handleSyncClick}
           syncing={syncing}
         />
       ) : activeTab === 'groups' ? (
@@ -524,7 +561,7 @@ export default function RoleDiff() {
           destinationName={getDestinationClusterName()}
           getGroupStatus={getGroupStatus}
           twoWay={twoWayComparison}
-          handleSync={handleSync}
+          handleSync={handleSyncClick}
           syncing={syncing}
         />
       ) : activeTab === 'users' ? (
@@ -536,10 +573,86 @@ export default function RoleDiff() {
           destinationName={getDestinationClusterName()}
           getUserStatus={getUserStatus}
           twoWay={twoWayComparison}
-          handleSync={handleSync}
+          handleSync={handleSyncClick}
           syncing={syncing}
         />
       ) : null}
+
+      {/* Sync Confirmation Dialog */}
+      <Dialog open={syncConfirmDialog.open} onOpenChange={(open) => {
+        if (!open) {
+          setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' });
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowLeftRight className="h-5 w-5 text-blue-600" />
+              Confirm Sync Operation
+            </DialogTitle>
+            <DialogDescription className="pt-2">
+              You are about to sync a {syncConfirmDialog.type} from <strong>{getSourceClusterName()}</strong> to <strong>{getDestinationClusterName()}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm font-semibold text-blue-900">
+                    {syncConfirmDialog.type === 'role' && 'Role'}
+                    {syncConfirmDialog.type === 'client' && 'Client'}
+                    {syncConfirmDialog.type === 'group' && 'Group'}
+                    {syncConfirmDialog.type === 'user' && 'User'}: <span className="font-mono">{syncConfirmDialog.name}</span>
+                  </p>
+                  <div className="text-xs text-blue-800 space-y-1">
+                    {syncConfirmDialog.type === 'role' && (
+                      <>
+                        <p>• The role will be created in the destination cluster with the same name and description.</p>
+                        <p>• Role attributes and composite roles will be preserved.</p>
+                      </>
+                    )}
+                    {syncConfirmDialog.type === 'client' && (
+                      <>
+                        <p>• The client will be exported from the source cluster and imported to the destination cluster.</p>
+                        <p>• All client settings, redirect URIs, scopes, and configurations will be preserved.</p>
+                        <p>• If a client with the same ID already exists, it will be updated.</p>
+                      </>
+                    )}
+                    {syncConfirmDialog.type === 'group' && (
+                      <>
+                        <p>• The group will be created in the destination cluster with the same path and attributes.</p>
+                        <p>• Group members and roles will be preserved.</p>
+                      </>
+                    )}
+                    {syncConfirmDialog.type === 'user' && (
+                      <>
+                        <p>• The user will be created in the destination cluster with the same username and attributes.</p>
+                        <p>• User credentials, roles, and group memberships will be preserved.</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' })}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSyncConfirm}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              <ArrowLeftRight className="h-4 w-4 mr-2" />
+              Confirm Sync
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -850,7 +963,7 @@ function RolesDiffView({
   destinationName: string;
   getRoleStatus: (name: string) => string;
   twoWay?: boolean;
-  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string) => void;
+  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => void;
   syncing: Record<string, boolean>;
 }) {
   const safeSourceRoles = sourceRoles || [];
@@ -900,19 +1013,29 @@ function RolesDiffView({
                         )}
                       </div>
                       {status === 'missing_in_destination' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => handleSync('role', role.name)}
-                          disabled={syncing[`role-${role.name}`]}
-                        >
-                          {syncing[`role-${role.name}`] ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ArrowDownToLine className="h-3 w-3" />
-                          )}
-                        </Button>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleSync('role', role.name, role.name)}
+                                disabled={syncing[`role-${role.name}`]}
+                              >
+                                {syncing[`role-${role.name}`] ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ArrowLeftRight className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs font-medium">Sync Role</p>
+                              <p className="text-xs mt-1 opacity-90">Sync this role to destination cluster</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                   </div>
@@ -1004,7 +1127,7 @@ function ClientsDiffView({
   destinationName: string;
   getClientStatus: (clientId: string) => string;
   twoWay?: boolean;
-  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string) => void;
+  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => void;
   syncing: Record<string, boolean>;
 }) {
   const safeSourceClients = sourceClients || [];
@@ -1093,19 +1216,29 @@ function ClientsDiffView({
                         )}
                       </div>
                       {(status === 'missing_in_destination' || status === 'different') && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => handleSync('client', client.clientId)}
-                          disabled={syncing[`client-${client.clientId}`]}
-                        >
-                          {syncing[`client-${client.clientId}`] ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ArrowDownToLine className="h-3 w-3" />
-                          )}
-                        </Button>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleSync('client', client.clientId, client.clientId)}
+                                disabled={syncing[`client-${client.clientId}`]}
+                              >
+                                {syncing[`client-${client.clientId}`] ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ArrowLeftRight className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs font-medium">Sync Client</p>
+                              <p className="text-xs mt-1 opacity-90">Export and import this client to destination cluster</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                   </div>
@@ -1206,7 +1339,7 @@ function GroupsDiffView({
   destinationName: string;
   getGroupStatus: (path: string) => string;
   twoWay?: boolean;
-  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string) => void;
+  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => void;
   syncing: Record<string, boolean>;
 }) {
   const safeSourceGroups = sourceGroups || [];
@@ -1299,19 +1432,29 @@ function GroupsDiffView({
                         )}
                       </div>
                       {(status === 'missing_in_destination' || status === 'different') && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => handleSync('group', group.path)}
-                          disabled={syncing[`group-${group.path}`]}
-                        >
-                          {syncing[`group-${group.path}`] ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ArrowDownToLine className="h-3 w-3" />
-                          )}
-                        </Button>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleSync('group', group.path, group.name || group.path)}
+                                disabled={syncing[`group-${group.path}`]}
+                              >
+                                {syncing[`group-${group.path}`] ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ArrowLeftRight className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs font-medium">Sync Group</p>
+                              <p className="text-xs mt-1 opacity-90">Sync this group to destination cluster</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                   </div>
@@ -1416,7 +1559,7 @@ function UsersDiffView({
   destinationName: string;
   getUserStatus: (username: string) => string;
   twoWay?: boolean;
-  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string) => void;
+  handleSync: (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => void;
   syncing: Record<string, boolean>;
 }) {
   const safeSourceUsers = sourceUsers || [];
@@ -1511,19 +1654,29 @@ function UsersDiffView({
                         )}
                       </div>
                       {(status === 'missing_in_destination' || status === 'different') && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 text-xs"
-                          onClick={() => handleSync('user', user.username)}
-                          disabled={syncing[`user-${user.username}`]}
-                        >
-                          {syncing[`user-${user.username}`] ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <ArrowDownToLine className="h-3 w-3" />
-                          )}
-                        </Button>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleSync('user', user.username, user.username)}
+                                disabled={syncing[`user-${user.username}`]}
+                              >
+                                {syncing[`user-${user.username}`] ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ArrowLeftRight className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p className="text-xs font-medium">Sync User</p>
+                              <p className="text-xs mt-1 opacity-90">Sync this user to destination cluster</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       )}
                     </div>
                   </div>

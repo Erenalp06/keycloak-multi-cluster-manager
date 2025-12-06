@@ -96,7 +96,7 @@ func (s *SyncService) SyncRole(sourceClusterID, destinationClusterID int, roleNa
 	)
 }
 
-// SyncClient syncs a client from source cluster to destination cluster
+// SyncClient syncs a client from source cluster to destination cluster using export/import
 func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clientID string) error {
 	// Get clusters
 	sourceCluster, err := s.clusterRepo.GetByID(sourceClusterID)
@@ -131,38 +131,37 @@ func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clie
 		return fmt.Errorf("failed to get destination token: %w", err)
 	}
 	destToken := destTokenResp.AccessToken
-	if err != nil {
-		return fmt.Errorf("failed to get destination token: %w", err)
-	}
 	
-	// Get client details from source
-	sourceClients, err := s.keycloakClient.GetClientDetails(
+	// Export all clients from source
+	exportedClients, err := s.keycloakClient.ExportClients(
 		sourceCluster.BaseURL,
 		sourceCluster.Realm,
 		sourceToken,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to get source clients: %w", err)
+		return fmt.Errorf("failed to export clients from source: %w", err)
 	}
 	
-	var client *domain.ClientDetail
-	for _, c := range sourceClients {
-		if c.ClientID == clientID {
-			client = &c
+	// Find the specific client to sync
+	var clientToSync map[string]interface{}
+	for _, client := range exportedClients {
+		if clientIDStr, ok := client["clientId"].(string); ok && clientIDStr == clientID {
+			clientToSync = client
 			break
 		}
 	}
 	
-	if client == nil {
+	if clientToSync == nil {
 		return fmt.Errorf("client not found in source cluster")
 	}
 	
-	// Create client in destination
-	return s.keycloakClient.CreateClient(
+	// Import only the specific client to destination
+	clientsToImport := []map[string]interface{}{clientToSync}
+	return s.keycloakClient.ImportClients(
 		destCluster.BaseURL,
 		destCluster.Realm,
 		destToken,
-		*client,
+		clientsToImport,
 	)
 }
 

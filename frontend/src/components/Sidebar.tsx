@@ -719,7 +719,7 @@ export default function Sidebar() {
           {!isCollapsed && <span className="ml-2">Logout</span>}
         </Button>
         {!isCollapsed && (
-          <p className="text-xs text-gray-500 text-center">v1.0.4 MVP</p>
+          <p className="text-xs text-gray-500 text-center">v1.0.4.1 MVP</p>
         )}
       </div>
     </div>

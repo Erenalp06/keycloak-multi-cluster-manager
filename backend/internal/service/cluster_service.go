@@ -289,7 +289,27 @@ func (s *ClusterService) GetClientSecret(clusterID int, clientID string) (string
 		return "", err
 	}
 	
-	return s.keycloakClient.GetClientSecret(cluster.BaseURL, cluster.Realm, token, clientID)
+	// First, get the client UUID from clientId
+	clients, err := s.keycloakClient.GetClients(cluster.BaseURL, cluster.Realm, token)
+	if err != nil {
+		return "", fmt.Errorf("failed to get clients: %w", err)
+	}
+	
+	var clientUUID string
+	for _, client := range clients {
+		if id, ok := client["id"].(string); ok {
+			if cid, ok := client["clientId"].(string); ok && cid == clientID {
+				clientUUID = id
+				break
+			}
+		}
+	}
+	
+	if clientUUID == "" {
+		return "", fmt.Errorf("client not found with clientId: %s", clientID)
+	}
+	
+	return s.keycloakClient.GetClientSecret(cluster.BaseURL, cluster.Realm, token, clientUUID)
 }
 
 func (s *ClusterService) GetGroupDetails(id int) ([]domain.GroupDetail, error) {
@@ -750,6 +770,58 @@ func (s *ClusterService) GetClientRoles(clusterID int, clientID string) ([]map[s
 	return s.keycloakClient.GetClientRoles(cluster.BaseURL, cluster.Realm, token, clientUUID)
 }
 
+// GetServiceAccountUser gets the service account user for a client
+func (s *ClusterService) GetServiceAccountUser(clusterID int, clientID string) (map[string]interface{}, error) {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return nil, err
+	}
+	
+	return s.keycloakClient.GetServiceAccountUser(cluster.BaseURL, cluster.Realm, token, clientID)
+}
+
+// AssignClientRolesToClient assigns client roles from source client to target client's service account
+func (s *ClusterService) AssignClientRolesToClient(clusterID int, targetClientID string, sourceClientID string, roleNames []string) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	// Get service account user for target client
+	serviceAccountUser, err := s.keycloakClient.GetServiceAccountUser(cluster.BaseURL, cluster.Realm, token, targetClientID)
+	if err != nil {
+		return fmt.Errorf("failed to get service account user: %w", err)
+	}
+	
+	userID, ok := serviceAccountUser["id"].(string)
+	if !ok {
+		return fmt.Errorf("service account user ID not found")
+	}
+	
+	// Assign client roles from source client to service account
+	clientRoles := map[string][]string{
+		sourceClientID: roleNames,
+	}
+	
+	return s.keycloakClient.AssignClientRolesToUser(cluster.BaseURL, cluster.Realm, token, userID, clientRoles)
+}
+
 // CreateUser creates a new user in Keycloak
 func (s *ClusterService) CreateUser(clusterID int, user domain.UserDetail) error {
 	cluster, err := s.repo.GetByID(clusterID)
@@ -802,5 +874,43 @@ func (s *ClusterService) CreateRealmRole(clusterID int, role domain.Role) error 
 	}
 	
 	return s.keycloakClient.CreateRole(cluster.BaseURL, cluster.Realm, token, role)
+}
+
+// CreateClientRole creates a new client role in Keycloak
+func (s *ClusterService) CreateClientRole(clusterID int, clientID string, role domain.Role) error {
+	cluster, err := s.repo.GetByID(clusterID)
+	if err != nil {
+		return err
+	}
+	if cluster == nil {
+		return fmt.Errorf("cluster not found")
+	}
+	
+	token, err := s.getClusterAccessToken(cluster)
+	if err != nil {
+		return err
+	}
+	
+	// Get client UUID from clientId
+	clients, err := s.keycloakClient.GetClients(cluster.BaseURL, cluster.Realm, token)
+	if err != nil {
+		return fmt.Errorf("failed to get clients: %w", err)
+	}
+	
+	var clientUUID string
+	for _, client := range clients {
+		if cid, ok := client["clientId"].(string); ok && cid == clientID {
+			if uuid, ok := client["id"].(string); ok {
+				clientUUID = uuid
+				break
+			}
+		}
+	}
+	
+	if clientUUID == "" {
+		return fmt.Errorf("client not found with clientId: %s", clientID)
+	}
+	
+	return s.keycloakClient.CreateClientRole(cluster.BaseURL, cluster.Realm, token, clientUUID, role)
 }
 

@@ -7,3 +7,4 @@ ADD COLUMN IF NOT EXISTS certificate_fingerprint VARCHAR(64);
 -- Create index for certificate fingerprint
 CREATE INDEX IF NOT EXISTS idx_ldap_config_cert_fingerprint ON ldap_config(certificate_fingerprint);
 
+

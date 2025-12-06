@@ -420,6 +420,43 @@ func (c *Client) GetClientSecret(baseURL, realm, accessToken, clientID string) (
 	return secret, nil
 }
 
+// CreateClientRole creates a new client role in Keycloak
+func (c *Client) CreateClientRole(baseURL, realm, accessToken, clientUUID string, role domain.Role) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/roles", baseURL, realm, clientUUID)
+	
+	roleData := map[string]interface{}{
+		"name":        role.Name,
+		"description": role.Description,
+		"composite":   role.Composite,
+	}
+	
+	jsonData, err := json.Marshal(roleData)
+	if err != nil {
+		return err
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create client role: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
 func (c *Client) getClientScopes(baseURL, realm, accessToken, clientID, scopeType string) ([]string, error) {
 	url := fmt.Sprintf("%s/admin/realms/%s/clients/%s/%s-client-scopes", baseURL, realm, clientID, scopeType)
 	

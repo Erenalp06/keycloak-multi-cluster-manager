@@ -12,3 +12,4 @@ ALTER COLUMN password DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_clusters_client_id ON clusters(client_id);
 
 
+

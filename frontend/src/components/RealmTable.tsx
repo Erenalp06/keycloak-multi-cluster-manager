@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import ClusterManagementPanel from '@/components/ClusterManagementPanel';
 import { 
   Eye, 
   Key, 
@@ -370,6 +371,9 @@ export default function RealmTable({
                                   </TooltipTrigger>
                                   <TooltipContent>
                                     <p className="text-xs font-medium">Delete Realm</p>
+                                    <p className="text-xs mt-1 opacity-90">
+                                      Keycloak'tan silmez, sadece listeden kaldırır
+                                    </p>
                                   </TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
@@ -383,24 +387,7 @@ export default function RealmTable({
                     {isExpanded && (
                       <tr className="bg-gray-50/50">
                         <td colSpan={7} className="px-6 py-4">
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
-                            <div className="bg-white rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Cluster Name</div>
-                              <div className="text-sm font-medium text-gray-900">{cluster.name}</div>
-                            </div>
-                            <div className="bg-white rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Base URL</div>
-                              <div className="text-sm font-medium text-gray-900 truncate">{cluster.base_url}</div>
-                            </div>
-                            <div className="bg-white rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Realm</div>
-                              <div className="text-sm font-medium text-gray-900">{cluster.realm || 'master'}</div>
-                            </div>
-                            <div className="bg-white rounded-lg p-3 border border-gray-200">
-                              <div className="text-xs text-gray-500 mb-1">Client ID</div>
-                              <div className="text-sm font-medium text-gray-900">{cluster.client_id || '-'}</div>
-                            </div>
-                          </div>
+                          <ClusterManagementPanel cluster={cluster} />
                         </td>
                       </tr>
                     )}

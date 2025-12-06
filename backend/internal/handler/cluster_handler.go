@@ -279,10 +279,10 @@ func (h *ClusterHandler) GetUserToken(c *fiber.Ctx) error {
 	}
 	
 	if req.GrantType == "password" {
-		if req.Username == "" || req.Password == "" {
+	if req.Username == "" || req.Password == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "Username and password are required for password grant"})
-		}
-		result, err := h.service.GetUserToken(id, req.Username, req.Password, req.ClientID)
+	}
+	result, err := h.service.GetUserToken(id, req.Username, req.Password, req.ClientID)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -572,6 +572,34 @@ func (h *ClusterHandler) GetClientRoles(c *fiber.Ctx) error {
 	return c.JSON(roles)
 }
 
+// AssignClientRolesToClient assigns client roles from source client to target client's service account
+func (h *ClusterHandler) AssignClientRolesToClient(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	var req struct {
+		TargetClientID string   `json:"target_client_id"`
+		SourceClientID string   `json:"source_client_id"`
+		RoleNames      []string `json:"role_names"`
+	}
+	
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if req.TargetClientID == "" || req.SourceClientID == "" || len(req.RoleNames) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "target_client_id, source_client_id, and role_names are required"})
+	}
+	
+	if err := h.service.AssignClientRolesToClient(id, req.TargetClientID, req.SourceClientID, req.RoleNames); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Client roles assigned successfully"})
+}
+
 // CreateUser creates a new user in Keycloak
 func (h *ClusterHandler) CreateUser(c *fiber.Ctx) error {
 	id, err := strconv.Atoi(c.Params("id"))
@@ -639,5 +667,33 @@ func (h *ClusterHandler) CreateRealmRole(c *fiber.Ctx) error {
 	}
 	
 	return c.JSON(fiber.Map{"message": "Realm role created successfully"})
+}
+
+// CreateClientRole creates a new client role in Keycloak
+func (h *ClusterHandler) CreateClientRole(c *fiber.Ctx) error {
+	id, err := strconv.Atoi(c.Params("id"))
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid cluster ID"})
+	}
+	
+	clientID := c.Query("clientId")
+	if clientID == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "clientId query parameter is required"})
+	}
+	
+	var role domain.Role
+	if err := c.BodyParser(&role); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	
+	if role.Name == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "name is required"})
+	}
+	
+	if err := h.service.CreateClientRole(id, clientID, role); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	
+	return c.JSON(fiber.Map{"message": "Client role created successfully"})
 }
 

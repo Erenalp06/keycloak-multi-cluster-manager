@@ -143,7 +143,9 @@ func main() {
 	adminClusters.Post("/:id/groups/create", clusterHandler.CreateGroup)
 	adminClusters.Post("/:id/roles/create", clusterHandler.CreateRealmRole)
 	adminClusters.Post("/:id/clients/create", clusterHandler.CreateClient)
+	adminClusters.Post("/:id/clients/roles/create", clusterHandler.CreateClientRole)
 	adminClusters.Get("/:id/clients/roles", clusterHandler.GetClientRoles)
+	adminClusters.Post("/:id/clients/assign-client-roles", clusterHandler.AssignClientRolesToClient)
 	
 	// Role routes
 	roles := protected.Group("/roles")

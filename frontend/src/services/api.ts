@@ -661,6 +661,39 @@ export const clusterApi = {
     return response.json();
   },
 
+  createClientRole: async (clusterId: number, clientId: string, role: Role): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/clients/roles/create?clientId=${encodeURIComponent(clientId)}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(role),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to create client role' }));
+      throw new Error(error.error || 'Failed to create client role');
+    }
+  },
+
+  assignClientRolesToClient: async (
+    clusterId: number,
+    targetClientId: string,
+    sourceClientId: string,
+    roleNames: string[]
+  ): Promise<void> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/clients/assign-client-roles`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        target_client_id: targetClientId,
+        source_client_id: sourceClientId,
+        role_names: roleNames,
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Failed to assign client roles to client' }));
+      throw new Error(error.error || 'Failed to assign client roles to client');
+    }
+  },
+
   createUser: async (clusterId: number, user: UserDetail): Promise<void> => {
     const response = await fetch(
       `${API_URL}/clusters/${clusterId}/users/create`,

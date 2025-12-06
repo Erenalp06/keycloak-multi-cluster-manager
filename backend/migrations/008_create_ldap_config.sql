@@ -24,3 +24,4 @@ INSERT INTO ldap_config (enabled, server_url, bind_dn, bind_password, user_searc
 VALUES (false, 'ldap://localhost:389', 'cn=admin,dc=example,dc=com', '', 'ou=users,dc=example,dc=com', false, true)
 ON CONFLICT DO NOTHING;
 
+

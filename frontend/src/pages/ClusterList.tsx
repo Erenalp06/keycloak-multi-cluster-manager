@@ -769,37 +769,37 @@ export default function ClusterList() {
 
             <div className="flex-1 overflow-y-auto">
               {addMode === 'manual' ? (
-                <div className="grid gap-4 py-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="name" className="text-sm">Name</Label>
-                    <Input
-                      id="name"
-                      className="h-9"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      placeholder="dev-cluster"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="base_url" className="text-sm">Base URL</Label>
-                    <Input
-                      id="base_url"
-                      className="h-9"
-                      value={formData.base_url}
-                      onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
-                      placeholder="https://keycloak.example.com"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="realm" className="text-sm">Realm</Label>
-                    <Input
-                      id="realm"
-                      className="h-9"
-                      value={formData.realm}
-                      onChange={(e) => setFormData({ ...formData, realm: e.target.value })}
-                      placeholder="master"
-                    />
-                  </div>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="name" className="text-sm">Name</Label>
+                <Input
+                  id="name"
+                  className="h-9"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="dev-cluster"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="base_url" className="text-sm">Base URL</Label>
+                <Input
+                  id="base_url"
+                  className="h-9"
+                  value={formData.base_url}
+                  onChange={(e) => setFormData({ ...formData, base_url: e.target.value })}
+                  placeholder="https://keycloak.example.com"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="realm" className="text-sm">Realm</Label>
+                <Input
+                  id="realm"
+                  className="h-9"
+                  value={formData.realm}
+                  onChange={(e) => setFormData({ ...formData, realm: e.target.value })}
+                  placeholder="master"
+                />
+              </div>
               <div className="grid gap-2">
                 <Label htmlFor="master_username" className="text-sm">Master Realm Admin Username</Label>
                 <Input
@@ -824,16 +824,16 @@ export default function ClusterList() {
                   placeholder="password"
                 />
               </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="group_name" className="text-sm">Group (Optional)</Label>
-                    <Input
-                      id="group_name"
-                      className="h-9"
-                      value={formData.group_name}
-                      onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
-                      placeholder="dev, prod, test, etc."
-                    />
-                  </div>
+              <div className="grid gap-2">
+                <Label htmlFor="group_name" className="text-sm">Group (Optional)</Label>
+                <Input
+                  id="group_name"
+                  className="h-9"
+                  value={formData.group_name}
+                  onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
+                  placeholder="dev, prod, test, etc."
+                />
+              </div>
                   <div className="grid gap-2">
                     <Label htmlFor="metrics_endpoint" className="text-sm">Metrics Endpoint (Optional)</Label>
                     <Input
@@ -846,7 +846,7 @@ export default function ClusterList() {
                     <p className="text-xs text-gray-500">
                       Prometheus metrics endpoint URL (e.g., http://keycloak-ip:9000/metrics)
                     </p>
-                  </div>
+            </div>
                 </div>
               ) : (
                 <div className="py-4">
@@ -986,9 +986,9 @@ export default function ClusterList() {
 
             <DialogFooter>
               {addMode === 'manual' ? (
-                <Button onClick={handleCreate} className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9">
-                  Create
-                </Button>
+              <Button onClick={handleCreate} className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9">
+                Create
+              </Button>
               ) : (
                 <Button
                   variant="outline"
@@ -1320,22 +1320,22 @@ export default function ClusterList() {
                           </Button>
                     )}
                     {isAdmin && (
-                          <Button
-                            variant="outline"
-                            size="sm"
+                      <Button
+                        variant="outline"
+                        size="sm"
                         className="text-xs h-7 px-2 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
                         onClick={() => handleDelete(cluster.id)}
                       >
                         <Trash2 className="h-3 w-3" />
-                          </Button>
+                      </Button>
                     )}
                   </div>
                 </CardContent>
               </Card>
-            );
+                );
           };
-          
-          return (
+
+        return (
             <div className="space-y-6">
               {/* Nested instance groups (base_url -> group_name) */}
               {sortedInstanceNames.map((instanceName) => {
@@ -1343,8 +1343,8 @@ export default function ClusterList() {
                 const isInstanceExpanded = expandedGroups.has(instanceName);
                 const totalClusters = Object.values(instanceData.groups).flat().length + instanceData.ungrouped.length;
                 const sortedSubGroupNames = Object.keys(instanceData.groups).sort();
-                
-                return (
+              
+              return (
                   <div key={instanceName} className="space-y-3">
                     <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
                       <button
@@ -1363,7 +1363,7 @@ export default function ClusterList() {
                           <ChevronRight className="h-4 w-4 text-gray-400" />
                         )}
                       </button>
-                    </div>
+                        </div>
                     {isInstanceExpanded && (
                       <div className="pl-4 border-l-2 border-gray-200 space-y-4">
                         {/* Sub-groups by group_name */}
@@ -1388,13 +1388,13 @@ export default function ClusterList() {
                                     <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
                                   )}
                                 </button>
-                              </div>
+                          </div>
                               {isSubGroupExpanded && (
                                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
                                   {subGroupClusters.map((cluster: Cluster) => renderClusterCard(cluster))}
-                                </div>
-                              )}
-                            </div>
+                              </div>
+                            )}
+                              </div>
                           );
                         })}
                         
@@ -1403,15 +1403,15 @@ export default function ClusterList() {
                           <div className="space-y-3">
                             <div className="text-xs font-semibold text-gray-500 pb-2 border-b border-gray-200">
                               Other ({instanceData.ungrouped.length})
-                            </div>
+                              </div>
                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
                               {instanceData.ungrouped.map((cluster: Cluster) => renderClusterCard(cluster))}
-                            </div>
                           </div>
-                        )}
-                      </div>
+                            </div>
+                          )}
+                        </div>
                     )}
-                  </div>
+                      </div>
                 );
               })}
               
@@ -1426,7 +1426,7 @@ export default function ClusterList() {
                       <button
                         onClick={() => toggleGroup(groupName)}
                         className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors"
-                      >
+                        >
                         <Folder className="h-4 w-4 text-gray-500" />
                         <span>{groupName}</span>
                         <span className="text-xs text-gray-500">({groupClusters.length})</span>
@@ -1436,13 +1436,13 @@ export default function ClusterList() {
                           <ChevronRight className="h-4 w-4 text-gray-400" />
                         )}
                       </button>
-                    </div>
+                          </div>
                     {isGroupExpanded && (
                       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pl-4 border-l-2 border-gray-200">
                         {groupClusters.map((cluster: Cluster) => renderClusterCard(cluster))}
-                      </div>
-                    )}
-                  </div>
+                        </div>
+                            )}
+                          </div>
                 );
               })}
               
@@ -1451,13 +1451,13 @@ export default function ClusterList() {
                 <div className="space-y-3">
                   <div className="pb-2 border-b border-gray-200">
                     <div className="text-sm font-semibold text-gray-700">Other Clusters</div>
-                  </div>
+                        </div>
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     {ungrouped.map((cluster: Cluster) => renderClusterCard(cluster))}
-                  </div>
-                </div>
-              )}
-            </div>
+                          </div>
+                        </div>
+                            )}
+                          </div>
           );
         }
 
@@ -1510,12 +1510,12 @@ export default function ClusterList() {
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-lg bg-blue-500 flex items-center justify-center shadow-sm">
                             <Server className="h-5 w-5 text-white" />
-                          </div>
+                        </div>
                           <div className="text-left">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-semibold text-gray-700">Keycloak Instance:</span>
                               <span className="text-base font-bold text-gray-900">{instanceName}</span>
-                            </div>
+                      </div>
                             <div className="text-xs text-gray-500 mt-0.5">
                               {totalClusters} {totalClusters === 1 ? 'realm' : 'realms'}
                             </div>
@@ -1541,8 +1541,8 @@ export default function ClusterList() {
                       onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
                       getClusterMetrics={getClusterMetrics}
                     />
-                  )}
-                </div>
+                        )}
+                      </div>
               );
             })}
             
@@ -1562,7 +1562,7 @@ export default function ClusterList() {
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-lg bg-purple-500 flex items-center justify-center shadow-sm">
                             <Folder className="h-5 w-5 text-white" />
-                          </div>
+                    </div>
                           <div className="text-left">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-semibold text-gray-700">Group:</span>
@@ -1579,8 +1579,8 @@ export default function ClusterList() {
                           <ChevronRight className="h-5 w-5 text-gray-400" />
                         )}
                       </button>
-                    </CardContent>
-                  </Card>
+                  </CardContent>
+                </Card>
                   
                   {isGroupExpanded && (
                     <RealmTable
@@ -1631,7 +1631,7 @@ export default function ClusterList() {
             )}
           </div>
         );
-        })()}
+      })()}
 
       {/* Detail Dialog */}
       <Dialog

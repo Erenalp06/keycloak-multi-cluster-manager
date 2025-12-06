@@ -1,6 +1,6 @@
 # Keycloak Multi-Manage MVP
 
-**Version: 1.0.4**
+**Version: 1.0.4.1**
 
 <img width="2554" height="1304" alt="image" src="https://github.com/user-attachments/assets/4ccd1955-00ca-4968-a08d-bb1c05ee4049" />
 
@@ -96,6 +96,28 @@ REACT_APP_API_URL=https://192.168.1.105/api
 4. "Role Diff" sayfasından iki cluster arasındaki farkları karşılaştırın
 
 ## Changelog
+
+### Version 1.0.4.1 (2025-01-XX)
+
+**Yeni Özellikler:**
+- ✅ Slide-over (yan panel) detay görünümü eklendi
+- ✅ Users, Groups ve Clients için tablo formatında görünüm
+- ✅ Client detaylarında secret görüntüleme (show/hide, copy)
+- ✅ Client role oluşturma özelliği
+- ✅ Component yapısı modülerleştirildi (UserTable, GroupTable, ClientTable)
+- ✅ Slide-over component'leri eklendi (UserDetailSlideOver, GroupDetailSlideOver, ClientDetailSlideOver)
+
+**Değişiklikler:**
+- 🔄 İç içe expandable yapı yerine slide-over kullanılıyor
+- 🔄 Liste görünümü yerine tablo formatı kullanılıyor
+- 🔄 ClusterManagementPanel component'i parçalara ayrıldı
+- 🔄 Client secret yükleme ve görüntüleme özelliği eklendi
+- 🔄 "Assign Role" yerine "Create Role" butonu eklendi (client roles için)
+
+**Düzeltmeler:**
+- 🐛 Client secret alma sorunu düzeltildi (clientId'den UUID bulma)
+- 🐛 Export dialog açılmama sorunu düzeltildi
+- 🐛 Component yapısı optimize edildi
 
 ### Version 1.0.4 (2025-01-XX)
 

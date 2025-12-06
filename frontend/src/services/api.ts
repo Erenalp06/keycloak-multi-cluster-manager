@@ -33,6 +33,15 @@ const getAuthHeaders = (): HeadersInit => {
   return headers;
 };
 
+export interface EnvironmentTag {
+  id: number;
+  name: string;
+  color: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Cluster {
   id: number;
   name: string;
@@ -42,6 +51,7 @@ export interface Cluster {
   client_secret?: string;  // Not sent to frontend for security
   group_name?: string | null;
   metrics_endpoint?: string | null;
+  environment_tags?: EnvironmentTag[];
   created_at: string;
   updated_at: string;
 }
@@ -1207,6 +1217,127 @@ export const ldapConfigApi = {
       throw new Error(data.error || 'Failed to delete certificate');
     }
     return data;
+  },
+};
+
+// Environment Tag interfaces
+export interface CreateEnvironmentTagRequest {
+  name: string;
+  color?: string;
+  description?: string;
+}
+
+export interface UpdateEnvironmentTagRequest {
+  name?: string;
+  color?: string;
+  description?: string;
+}
+
+export interface AssignTagsToClustersRequest {
+  cluster_ids: number[];
+  tag_ids: number[];
+}
+
+export interface RemoveTagsFromClustersRequest {
+  cluster_ids: number[];
+  tag_ids: number[];
+}
+
+export const environmentTagApi = {
+  getAll: async (): Promise<EnvironmentTag[]> => {
+    const response = await fetch(`${API_URL}/environment-tags`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get environment tags');
+    }
+    return response.json();
+  },
+
+  getById: async (id: number): Promise<EnvironmentTag> => {
+    const response = await fetch(`${API_URL}/environment-tags/${id}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get environment tag');
+    }
+    return response.json();
+  },
+
+  create: async (data: CreateEnvironmentTagRequest): Promise<EnvironmentTag> => {
+    const response = await fetch(`${API_URL}/environment-tags`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create environment tag');
+    }
+    return response.json();
+  },
+
+  update: async (id: number, data: UpdateEnvironmentTagRequest): Promise<EnvironmentTag> => {
+    const response = await fetch(`${API_URL}/environment-tags/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update environment tag');
+    }
+    return response.json();
+  },
+
+  delete: async (id: number): Promise<void> => {
+    const response = await fetch(`${API_URL}/environment-tags/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete environment tag');
+    }
+  },
+
+  assignTagsToClusters: async (data: AssignTagsToClustersRequest): Promise<{ message: string }> => {
+    const response = await fetch(`${API_URL}/environment-tags/assign`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to assign tags to clusters');
+    }
+    return response.json();
+  },
+
+  removeTagsFromClusters: async (data: RemoveTagsFromClustersRequest): Promise<{ message: string }> => {
+    const response = await fetch(`${API_URL}/environment-tags/remove`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to remove tags from clusters');
+    }
+    return response.json();
+  },
+
+  getTagsByClusterId: async (clusterId: number): Promise<EnvironmentTag[]> => {
+    const response = await fetch(`${API_URL}/environment-tags/clusters/${clusterId}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get tags for cluster');
+    }
+    return response.json();
   },
 };
 

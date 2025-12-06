@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Badge } from '@/components/ui/badge';
 import ClusterManagementPanel from '@/components/ClusterManagementPanel';
 import { 
   Eye, 
@@ -34,6 +35,9 @@ interface RealmTableProps {
   onDelete: (clusterId: number) => void;
   onEdit: (cluster: Cluster) => void;
   onTokenInspector: (clusterId: number) => void;
+  onAssignTags?: (clusterId: number) => void;
+  selectedClusters?: Set<number>;
+  onClusterSelect?: (clusterId: number, selected: boolean) => void;
   getClusterMetrics: (clusterId: number) => ClusterMetrics | { clients: number; roles: number; users: number; groups: number; };
 }
 
@@ -45,6 +49,9 @@ export default function RealmTable({
   onDelete,
   onEdit,
   onTokenInspector,
+  onAssignTags,
+  selectedClusters,
+  onClusterSelect,
   getClusterMetrics,
 }: RealmTableProps) {
   const navigate = useNavigate();
@@ -158,6 +165,20 @@ export default function RealmTable({
                       {/* Realm Name */}
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-3">
+                          {onClusterSelect && (
+                            <input
+                              type="checkbox"
+                              checked={selectedClusters?.has(cluster.id) || false}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                if (onClusterSelect) {
+                                  onClusterSelect(cluster.id, e.target.checked);
+                                }
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="rounded cursor-pointer"
+                            />
+                          )}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -176,7 +197,7 @@ export default function RealmTable({
                               health.isHealthy ? 'bg-green-500' : health.isError ? 'bg-red-500' : 'bg-gray-400'
                             }`} />
                             <div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-semibold text-gray-900">
                                   {cluster.realm || 'master'}
                                 </span>
@@ -185,6 +206,24 @@ export default function RealmTable({
                                     <Folder className="h-2.5 w-2.5" />
                                     {cluster.group_name}
                                   </span>
+                                )}
+                                {cluster.environment_tags && cluster.environment_tags.length > 0 && (
+                                  <>
+                                    {cluster.environment_tags.map((tag) => (
+                                      <span
+                                        key={tag.id}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border"
+                                        style={{
+                                          backgroundColor: `${tag.color}20`,
+                                          color: tag.color,
+                                          borderColor: `${tag.color}40`,
+                                        }}
+                                      >
+                                        <Tag className="h-2.5 w-2.5" />
+                                        {tag.name}
+                                      </span>
+                                    ))}
+                                  </>
                                 )}
                               </div>
                               <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
@@ -290,6 +329,34 @@ export default function RealmTable({
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
+
+                          {onAssignTags && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 px-2.5 text-xs font-medium bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200 hover:border-orange-300 hover:shadow-sm transition-all duration-200"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      console.log('Tags button clicked for cluster:', cluster.id);
+                                      if (onAssignTags) {
+                                        onAssignTags(cluster.id);
+                                      }
+                                    }}
+                                  >
+                                    <Tag className="h-3.5 w-3.5 mr-1.5" />
+                                    Tags
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs font-medium">Assign Tags</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
 
                           <TooltipProvider>
                             <Tooltip>

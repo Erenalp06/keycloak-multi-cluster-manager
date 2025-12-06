@@ -15,6 +15,7 @@ import PermissionAnalyzer from './pages/PermissionAnalyzer';
 import TokenInspector from './pages/TokenInspector';
 import Tools from './pages/Tools';
 import KeycloakManagement from './pages/KeycloakManagement';
+import EnvironmentTags from './pages/EnvironmentTags';
 
 function App() {
   return (
@@ -41,6 +42,7 @@ function App() {
                       <Route path="/users" element={<Users />} />
                       <Route path="/roles" element={<Roles />} />
                       <Route path="/settings" element={<Settings />} />
+                      <Route path="/environment-tags" element={<EnvironmentTags />} />
                       <Route path="/keycloak-management" element={<KeycloakManagement />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>

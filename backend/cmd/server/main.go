@@ -28,6 +28,7 @@ func main() {
 	permissionRepo := postgres.NewPermissionRepository(db)
 	appRoleRepo := postgres.NewAppRoleRepository(db)
 	ldapConfigRepo := postgres.NewLDAPConfigRepository(db)
+	environmentTagRepo := postgres.NewEnvironmentTagRepository(db)
 	
 	// Initialize default admin user if it doesn't exist
 	if err := service.InitDefaultAdmin(userRepo); err != nil {
@@ -39,6 +40,7 @@ func main() {
 	
 	// Initialize services
 	clusterService := service.NewClusterService(clusterRepo)
+	clusterService.SetTagRepository(environmentTagRepo) // Inject tag repository
 	roleService := service.NewRoleService(clusterRepo)
 	diffService := service.NewDiffService(roleService, clusterService)
 	syncService := service.NewSyncService(clusterRepo)
@@ -47,6 +49,7 @@ func main() {
 	userService := service.NewUserService(userRepo, appRoleRepo)
 	appRoleService := service.NewAppRoleService(appRoleRepo, permissionRepo)
 	ldapConfigService := service.NewLDAPConfigService(ldapConfigRepo, certService)
+	environmentTagService := service.NewEnvironmentTagService(environmentTagRepo, clusterRepo)
 	
 	// Initialize handlers
 	clusterHandler := handler.NewClusterHandler(clusterService)
@@ -58,6 +61,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userService)
 	appRoleHandler := handler.NewAppRoleHandler(appRoleService)
 	ldapConfigHandler := handler.NewLDAPConfigHandler(ldapConfigService)
+	environmentTagHandler := handler.NewEnvironmentTagHandler(environmentTagService)
 	
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -198,6 +202,17 @@ func main() {
 	ldapConfig.Post("/test", ldapConfigHandler.TestConnection)
 	ldapConfig.Post("/fetch-certificate", ldapConfigHandler.FetchCertificate)
 	ldapConfig.Delete("/certificate", ldapConfigHandler.DeleteCertificate)
+	
+	// Environment tag routes (admin only)
+	envTags := protected.Group("/environment-tags", middleware.AdminMiddleware(appRoleService))
+	envTags.Get("/", environmentTagHandler.GetAll)
+	envTags.Get("/:id", environmentTagHandler.GetByID)
+	envTags.Post("/", environmentTagHandler.Create)
+	envTags.Put("/:id", environmentTagHandler.Update)
+	envTags.Delete("/:id", environmentTagHandler.Delete)
+	envTags.Post("/assign", environmentTagHandler.AssignTagsToClusters)
+	envTags.Post("/remove", environmentTagHandler.RemoveTagsFromClusters)
+	envTags.Get("/clusters/:clusterId", environmentTagHandler.GetTagsByClusterID)
 	
 	// Start server
 	port := os.Getenv("SERVER_PORT")

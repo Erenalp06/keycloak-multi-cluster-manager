@@ -8,15 +8,21 @@ import (
 )
 
 type ClusterService struct {
-	repo         *postgres.ClusterRepository
-	keycloakClient *keycloak.Client
+	repo            *postgres.ClusterRepository
+	keycloakClient  *keycloak.Client
+	tagRepo         *postgres.EnvironmentTagRepository
 }
 
 func NewClusterService(repo *postgres.ClusterRepository) *ClusterService {
 	return &ClusterService{
-		repo:         repo,
+		repo:           repo,
 		keycloakClient: keycloak.NewClient(),
+		tagRepo:        nil, // Will be set via SetTagRepository if needed
 	}
+}
+
+func (s *ClusterService) SetTagRepository(tagRepo *postgres.EnvironmentTagRepository) {
+	s.tagRepo = tagRepo
 }
 
 func (s *ClusterService) Create(req domain.CreateClusterRequest) (*domain.Cluster, error) {
@@ -64,11 +70,42 @@ func (s *ClusterService) Create(req domain.CreateClusterRequest) (*domain.Cluste
 }
 
 func (s *ClusterService) GetAll() ([]*domain.Cluster, error) {
-	return s.repo.GetAll()
+	clusters, err := s.repo.GetAll()
+	if err != nil {
+		return nil, err
+	}
+	
+	// Load tags for each cluster if tagRepo is available
+	if s.tagRepo != nil {
+		for _, cluster := range clusters {
+			tags, err := s.tagRepo.GetTagsByClusterID(cluster.ID)
+			if err == nil {
+				cluster.EnvironmentTags = tags
+			}
+		}
+	}
+	
+	return clusters, nil
 }
 
 func (s *ClusterService) GetByID(id int) (*domain.Cluster, error) {
-	return s.repo.GetByID(id)
+	cluster, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if cluster == nil {
+		return nil, nil
+	}
+	
+	// Load tags if tagRepo is available
+	if s.tagRepo != nil {
+		tags, err := s.tagRepo.GetTagsByClusterID(cluster.ID)
+		if err == nil {
+			cluster.EnvironmentTags = tags
+		}
+	}
+	
+	return cluster, nil
 }
 
 func (s *ClusterService) Update(id int, req domain.CreateClusterRequest) (*domain.Cluster, error) {

@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Save, Globe, Bell, Database, Info, Users, UserCog, Key, TestTube, AlertCircle, CheckCircle2, Shield, Trash2, Download } from 'lucide-react';
+import { Save, Globe, Bell, Database, Info, Users, UserCog, Key, TestTube, AlertCircle, CheckCircle2, Shield, Trash2, Download, Tag } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { ldapConfigApi, LDAPConfig, UpdateLDAPConfigRequest } from '@/services/api';
 
@@ -253,6 +253,24 @@ export default function Settings() {
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600">Configure roles and permissions for the application.</p>
+              </CardContent>
+            </Card>
+
+            <Card 
+              onClick={() => navigate('/environment-tags')}
+              className="border border-gray-200 shadow-sm hover:shadow-md transition-shadow cursor-pointer hover:border-blue-300"
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Tag className="h-5 w-5 text-gray-500" />
+                  <CardTitle className="text-base font-semibold text-gray-900">Environment Tags</CardTitle>
+                </div>
+                <CardDescription className="text-xs text-gray-500 mt-1">
+                  Manage environment tags
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-gray-600">Create and manage environment tags (Prod, Dev, Test, etc.) and assign them to clusters.</p>
               </CardContent>
             </Card>
 

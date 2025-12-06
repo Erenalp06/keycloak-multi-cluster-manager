@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics, DiscoverRealmsRequest, RealmInfo } from '@/services/api';
+import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics, DiscoverRealmsRequest, RealmInfo, environmentTagApi, EnvironmentTag, AssignTagsToClustersRequest } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,6 +34,16 @@ export default function ClusterList() {
   const [loadingVersions, setLoadingVersions] = useState<Record<number, boolean>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all');
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<number>>(new Set());
+  const [tags, setTags] = useState<EnvironmentTag[]>([]);
+  const [tagFilterOpen, setTagFilterOpen] = useState(false);
+  const [selectedClusters, setSelectedClusters] = useState<Set<number>>(new Set());
+  const [tagAssignDialog, setTagAssignDialog] = useState<{ open: boolean; clusterId: number | null; isBulk: boolean }>({
+    open: false,
+    clusterId: null,
+    isBulk: false,
+  });
+  const [selectedTagsForAssign, setSelectedTagsForAssign] = useState<Set<number>>(new Set());
   const [detailDialog, setDetailDialog] = useState<{ open: boolean; type: 'clients' | 'users' | 'groups' | 'roles' | null; clusterId: number | null }>({
     open: false,
     type: null,
@@ -88,7 +98,58 @@ export default function ClusterList() {
 
   useEffect(() => {
     loadClusters();
-  }, []);
+    if (isAdmin) {
+      loadTags();
+    }
+  }, [isAdmin]);
+  
+  const loadTags = async () => {
+    try {
+      const data = await environmentTagApi.getAll();
+      setTags(data);
+    } catch (error) {
+      console.error('Failed to load tags:', error);
+    }
+  };
+
+  const handleAssignTagsToCluster = async () => {
+    const clusterIds = tagAssignDialog.isBulk 
+      ? Array.from(selectedClusters)
+      : (tagAssignDialog.clusterId ? [tagAssignDialog.clusterId] : []);
+    
+    if (clusterIds.length === 0 || selectedTagsForAssign.size === 0) {
+      alert(tagAssignDialog.isBulk 
+        ? 'Please select at least one cluster and one tag'
+        : 'Please select at least one tag');
+      return;
+    }
+
+    try {
+      const request: AssignTagsToClustersRequest = {
+        cluster_ids: clusterIds,
+        tag_ids: Array.from(selectedTagsForAssign),
+      };
+      await environmentTagApi.assignTagsToClusters(request);
+      alert(`Tags assigned successfully to ${clusterIds.length} cluster${clusterIds.length > 1 ? 's' : ''}`);
+      setTagAssignDialog({ open: false, clusterId: null, isBulk: false });
+      setSelectedTagsForAssign(new Set());
+      if (tagAssignDialog.isBulk) {
+        setSelectedClusters(new Set());
+      }
+      loadClusters();
+    } catch (error: any) {
+      alert(error.message || 'Failed to assign tags');
+    }
+  };
+
+  const handleBulkTagAssign = () => {
+    if (selectedClusters.size === 0) {
+      alert('Please select at least one cluster');
+      return;
+    }
+    setTagAssignDialog({ open: true, clusterId: null, isBulk: true });
+    setSelectedTagsForAssign(new Set());
+  };
 
   // Auto-expand all groups when clusters are loaded
   useEffect(() => {
@@ -447,15 +508,33 @@ export default function ClusterList() {
     }
   };
 
-  // Filter clusters based on health filter
+  // Filter clusters based on health filter and tag filter
   const getFilteredClusters = () => {
-    if (healthFilter === 'all') return clusters;
-    return clusters.filter(cluster => {
-      const health = healthStatuses[cluster.id];
-      if (!health) return healthFilter === 'offline';
-      const isHealthy = health.status === 'healthy';
-      return healthFilter === 'online' ? isHealthy : !isHealthy;
-    });
+    let filtered = clusters;
+    
+    // Health filter
+    if (healthFilter !== 'all') {
+      filtered = filtered.filter(cluster => {
+        const health = healthStatuses[cluster.id];
+        if (!health) return healthFilter === 'offline';
+        const isHealthy = health.status === 'healthy';
+        return healthFilter === 'online' ? isHealthy : !isHealthy;
+      });
+    }
+    
+    // Tag filter
+    if (selectedTagIds.size > 0) {
+      filtered = filtered.filter(cluster => {
+        if (!cluster.environment_tags || cluster.environment_tags.length === 0) {
+          return false;
+        }
+        const clusterTagIds = new Set(cluster.environment_tags.map(tag => tag.id));
+        // Check if cluster has at least one of the selected tags
+        return Array.from(selectedTagIds).some(tagId => clusterTagIds.has(tagId));
+      });
+    }
+    
+    return filtered;
   };
 
   // Group clusters by base_url (Keycloak instance) first, then by group_name (nested)
@@ -673,6 +752,67 @@ export default function ClusterList() {
             </Button>
           </div>
           
+          {/* Tag Filter */}
+          {isAdmin && tags.length > 0 && (
+            <div className="relative" onMouseLeave={() => setTagFilterOpen(false)}>
+              <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
+                <Tag className="h-3.5 w-3.5 text-gray-600 ml-1" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs"
+                  onMouseEnter={() => setTagFilterOpen(true)}
+                  onClick={() => setTagFilterOpen(!tagFilterOpen)}
+                >
+                  {selectedTagIds.size > 0 ? `${selectedTagIds.size} selected` : 'Filter by tag'}
+                </Button>
+                {selectedTagIds.size > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedTagIds(new Set());
+                    }}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                )}
+              </div>
+              {tagFilterOpen && (
+                <div className="absolute top-full right-0 mt-1 bg-white border rounded-lg shadow-lg p-3 z-50 min-w-[250px] max-h-[400px] overflow-y-auto">
+                  <div className="text-xs font-semibold mb-2 text-gray-700">Select Tags to Filter:</div>
+                  <div className="space-y-1">
+                    {tags.map((tag) => (
+                      <label key={tag.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                        <input
+                          type="checkbox"
+                          checked={selectedTagIds.has(tag.id)}
+                          onChange={(e) => {
+                            const newSet = new Set(selectedTagIds);
+                            if (e.target.checked) {
+                              newSet.add(tag.id);
+                            } else {
+                              newSet.delete(tag.id);
+                            }
+                            setSelectedTagIds(newSet);
+                          }}
+                          className="rounded"
+                        />
+                        <div
+                          className="w-4 h-4 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span className="text-sm flex-1">{tag.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
           {/* Health Filter */}
           <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1">
             <Filter className="h-4 w-4 text-gray-600 ml-2" />
@@ -703,6 +843,19 @@ export default function ClusterList() {
               Offline ({offlineCount})
             </Button>
           </div>
+
+          {/* Bulk Tag Assign */}
+          {isAdmin && selectedClusters.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBulkTagAssign}
+              className="h-8 text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200"
+            >
+              <Tag className="h-3.5 w-3.5 mr-1.5" />
+              Assign Tags ({selectedClusters.size})
+            </Button>
+          )}
 
           {/* Refresh Health Check */}
           <Button
@@ -1539,6 +1692,24 @@ export default function ClusterList() {
                       onDelete={handleDelete}
                       onEdit={handleEdit}
                       onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                      onAssignTags={isAdmin ? (clusterId) => {
+                        const cluster = clusters.find(c => c.id === clusterId);
+                        if (cluster) {
+                          const existingTagIds = new Set(cluster.environment_tags?.map(t => t.id) || []);
+                          setSelectedTagsForAssign(existingTagIds);
+                          setTagAssignDialog({ open: true, clusterId, isBulk: false });
+                        }
+                      } : undefined}
+                      selectedClusters={selectedClusters}
+                      onClusterSelect={isAdmin ? (clusterId, selected) => {
+                        const newSet = new Set(selectedClusters);
+                        if (selected) {
+                          newSet.add(clusterId);
+                        } else {
+                          newSet.delete(clusterId);
+                        }
+                        setSelectedClusters(newSet);
+                      } : undefined}
                       getClusterMetrics={getClusterMetrics}
                     />
                         )}
@@ -1591,6 +1762,24 @@ export default function ClusterList() {
                       onDelete={handleDelete}
                       onEdit={handleEdit}
                       onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                      onAssignTags={isAdmin ? (clusterId) => {
+                        const cluster = clusters.find(c => c.id === clusterId);
+                        if (cluster) {
+                          const existingTagIds = new Set(cluster.environment_tags?.map(t => t.id) || []);
+                          setSelectedTagsForAssign(existingTagIds);
+                          setTagAssignDialog({ open: true, clusterId, isBulk: false });
+                        }
+                      } : undefined}
+                      selectedClusters={selectedClusters}
+                      onClusterSelect={isAdmin ? (clusterId, selected) => {
+                        const newSet = new Set(selectedClusters);
+                        if (selected) {
+                          newSet.add(clusterId);
+                        } else {
+                          newSet.delete(clusterId);
+                        }
+                        setSelectedClusters(newSet);
+                      } : undefined}
                       getClusterMetrics={getClusterMetrics}
                     />
                   )}
@@ -1625,6 +1814,24 @@ export default function ClusterList() {
                   onDelete={handleDelete}
                   onEdit={handleEdit}
                   onTokenInspector={(clusterId) => setTokenInspectorDialog({ open: true, clusterId })}
+                  onAssignTags={isAdmin ? (clusterId) => {
+                    const cluster = clusters.find(c => c.id === clusterId);
+                    if (cluster) {
+                      const existingTagIds = new Set(cluster.environment_tags?.map(t => t.id) || []);
+                      setSelectedTagsForAssign(existingTagIds);
+                      setTagAssignDialog({ open: true, clusterId, isBulk: false });
+                    }
+                  } : undefined}
+                  selectedClusters={selectedClusters}
+                  onClusterSelect={isAdmin ? (clusterId, selected) => {
+                    const newSet = new Set(selectedClusters);
+                    if (selected) {
+                      newSet.add(clusterId);
+                    } else {
+                      newSet.delete(clusterId);
+                    }
+                    setSelectedClusters(newSet);
+                  } : undefined}
                   getClusterMetrics={getClusterMetrics}
                 />
               </div>
@@ -1872,6 +2079,113 @@ export default function ClusterList() {
           onOpenChange={(open) => setTokenInspectorDialog({ open, clusterId: open ? tokenInspectorDialog.clusterId : null })}
           cluster={clusters.find(c => c.id === tokenInspectorDialog.clusterId) || null}
         />
+      )}
+
+      {/* Tag Assign Dialog */}
+      {isAdmin && (
+        <Dialog open={tagAssignDialog.open} onOpenChange={(open) => {
+          if (!open) {
+            setTagAssignDialog({ open: false, clusterId: null, isBulk: false });
+            setSelectedTagsForAssign(new Set());
+            if (tagAssignDialog.isBulk) {
+              setSelectedClusters(new Set());
+            }
+          }
+        }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                {tagAssignDialog.isBulk 
+                  ? `Assign Tags to ${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''}`
+                  : 'Assign Tags to Cluster'}
+              </DialogTitle>
+              <DialogDescription>
+                {tagAssignDialog.isBulk
+                  ? `Select tags to assign to ${selectedClusters.size} selected cluster${selectedClusters.size > 1 ? 's' : ''}`
+                  : 'Select tags to assign to this cluster'}
+              </DialogDescription>
+            </DialogHeader>
+            {tagAssignDialog.isBulk && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <div className="text-sm font-medium text-blue-900 mb-2">Selected Clusters:</div>
+                <div className="flex flex-wrap gap-2">
+                  {Array.from(selectedClusters).map(clusterId => {
+                    const cluster = clusters.find(c => c.id === clusterId);
+                    return cluster ? (
+                      <span key={clusterId} className="text-xs px-2 py-1 bg-white rounded border border-blue-300 text-blue-700">
+                        {cluster.name || cluster.realm}
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>Select Tags</Label>
+                <div className="border rounded-lg p-3 max-h-64 overflow-y-auto space-y-2">
+                  {tags.map((tag) => {
+                    let hasTag = false;
+                    if (tagAssignDialog.isBulk) {
+                      // For bulk, check if ALL selected clusters have this tag
+                      const clustersWithTag = Array.from(selectedClusters).filter(clusterId => {
+                        const cluster = clusters.find(c => c.id === clusterId);
+                        return cluster?.environment_tags?.some(t => t.id === tag.id);
+                      });
+                      hasTag = clustersWithTag.length === selectedClusters.size;
+                    } else {
+                      const cluster = clusters.find(c => c.id === tagAssignDialog.clusterId);
+                      hasTag = cluster?.environment_tags?.some(t => t.id === tag.id) || false;
+                    }
+                    return (
+                      <label key={tag.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                        <input
+                          type="checkbox"
+                          checked={selectedTagsForAssign.has(tag.id) || hasTag}
+                          disabled={hasTag}
+                          onChange={(e) => {
+                            const newSet = new Set(selectedTagsForAssign);
+                            if (e.target.checked) {
+                              newSet.add(tag.id);
+                            } else {
+                              newSet.delete(tag.id);
+                            }
+                            setSelectedTagsForAssign(newSet);
+                          }}
+                          className="rounded"
+                        />
+                        <div
+                          className="w-4 h-4 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span className="text-sm flex-1">{tag.name}</span>
+                        {hasTag && (
+                          <span className="text-xs text-gray-500">
+                            {tagAssignDialog.isBulk ? '(all have this tag)' : '(already assigned)'}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => {
+                setTagAssignDialog({ open: false, clusterId: null, isBulk: false });
+                setSelectedTagsForAssign(new Set());
+                if (tagAssignDialog.isBulk) {
+                  setSelectedClusters(new Set());
+                }
+              }}>
+                Cancel
+              </Button>
+              <Button onClick={handleAssignTagsToCluster} disabled={selectedTagsForAssign.size === 0}>
+                Assign Tags {tagAssignDialog.isBulk ? `to ${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''}` : ''}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

@@ -3,16 +3,17 @@ package domain
 import "time"
 
 type Cluster struct {
-	ID              int       `json:"id"`
-	Name            string    `json:"name"`
-	BaseURL         string    `json:"base_url"`
-	Realm           string    `json:"realm"`
-	ClientID        string    `json:"client_id"`        // Always "multi-manage"
-	ClientSecret    string    `json:"client_secret"`   // Service account secret
-	GroupName       *string   `json:"group_name,omitempty"`
-	MetricsEndpoint *string   `json:"metrics_endpoint,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              int                  `json:"id"`
+	Name            string               `json:"name"`
+	BaseURL         string               `json:"base_url"`
+	Realm           string               `json:"realm"`
+	ClientID        string               `json:"client_id"`        // Always "multi-manage"
+	ClientSecret    string               `json:"client_secret"`   // Service account secret
+	GroupName       *string              `json:"group_name,omitempty"`
+	MetricsEndpoint *string              `json:"metrics_endpoint,omitempty"`
+	EnvironmentTags []*EnvironmentTag    `json:"environment_tags,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type CreateClusterRequest struct {

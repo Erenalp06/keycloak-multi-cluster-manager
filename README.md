@@ -95,74 +95,9 @@ REACT_APP_API_URL=https://192.168.1.105/api
 3. Cluster detay sayfasından rollerini görüntüleyin
 4. "Role Diff" sayfasından iki cluster arasındaki farkları karşılaştırın
 
-## Changelog
+## Değişiklik Günlüğü
 
-### Version 1.0.4.1 (2025-01-XX)
-
-**Yeni Özellikler:**
-- ✅ Slide-over (yan panel) detay görünümü eklendi
-- ✅ Users, Groups ve Clients için tablo formatında görünüm
-- ✅ Client detaylarında secret görüntüleme (show/hide, copy)
-- ✅ Client role oluşturma özelliği
-- ✅ Component yapısı modülerleştirildi (UserTable, GroupTable, ClientTable)
-- ✅ Slide-over component'leri eklendi (UserDetailSlideOver, GroupDetailSlideOver, ClientDetailSlideOver)
-
-**Değişiklikler:**
-- 🔄 İç içe expandable yapı yerine slide-over kullanılıyor
-- 🔄 Liste görünümü yerine tablo formatı kullanılıyor
-- 🔄 ClusterManagementPanel component'i parçalara ayrıldı
-- 🔄 Client secret yükleme ve görüntüleme özelliği eklendi
-- 🔄 "Assign Role" yerine "Create Role" butonu eklendi (client roles için)
-
-**Düzeltmeler:**
-- 🐛 Client secret alma sorunu düzeltildi (clientId'den UUID bulma)
-- 🐛 Export dialog açılmama sorunu düzeltildi
-- 🐛 Component yapısı optimize edildi
-
-### Version 1.0.4 (2025-01-XX)
-
-**Yeni Özellikler:**
-- ✅ LDAP/LDAPS authentication provider eklendi
-- ✅ Active Directory (AD) desteği ile LDAP girişi
-- ✅ Sertifika yönetimi: AD sunucusundan otomatik sertifika alma ve kaydetme
-- ✅ Login ekranında authentication type seçimi (Local/LDAP)
-- ✅ LDAP kullanıcıları için otomatik local user provisioning
-- ✅ Settings sayfasında LDAP yapılandırması ve sertifika yönetimi
-- ✅ Radix UI Select component ile temaya uygun combobox
-
-**Değişiklikler:**
-- 🔄 Login ekranında radio button yerine combobox kullanılıyor
-- 🔄 LDAP bağlantıları için sertifika trust store desteği
-- 🔄 Sertifikalar `/opt/mcm/certs/` klasörüne kaydediliyor
-
-**Düzeltmeler:**
-- 🐛 LDAP kullanıcıları için role assignment sorunu düzeltildi
-- 🐛 Permission hataları düzeltildi (403 Forbidden)
-
-### Version 1.0.3 (2025-11-29)
-
-**Yeni Özellikler:**
-- ✅ Nginx reverse proxy ile HTTPS desteği eklendi
-- ✅ Otomatik SSL sertifikası oluşturma (self-signed)
-- ✅ Backend'e public `/health` ve `/` endpoint'leri eklendi
-- ✅ Frontend API URL'i dinamik olarak window.location'dan alınıyor
-- ✅ Caddy yerine Nginx kullanılıyor (daha stabil)
-
-**Değişiklikler:**
-- 🔄 Caddy reverse proxy → Nginx reverse proxy
-- 🔄 Frontend build sırasında API URL artık opsiyonel
-- 🔄 SSL sertifikası container başlatıldığında otomatik oluşturuluyor
-
-**Düzeltmeler:**
-- 🐛 SSL sertifika hataları düzeltildi
-- 🐛 Network yapılandırması iyileştirildi
-- 🐛 Backend health check endpoint'i eklendi
-
-### Version 1.0.0 MVP
-
-- İlk MVP sürümü
-- Cluster yönetimi
-- Role yönetimi ve diff analizi
+[CHANGELOG.md](./CHANGELOG.md)
 
 ## Notlar
 

@@ -45,11 +45,13 @@ export default function RoleDiff() {
     type: 'role' | 'client' | 'group' | 'user' | null;
     identifier: string;
     name: string;
+    clientDiff?: ClientDiff; // For client sync, include diff info
   }>({
     open: false,
     type: null,
     identifier: '',
     name: '',
+    clientDiff: undefined,
   });
 
   // Roles
@@ -279,11 +281,19 @@ export default function RoleDiff() {
       alert('Please select both source and destination clusters');
       return;
     }
+    
+    // For client sync, find the diff to show scope/role differences
+    let clientDiff: ClientDiff | undefined;
+    if (type === 'client') {
+      clientDiff = clientDiffs.find(d => d && d.client && d.client.clientId === identifier);
+    }
+    
     setSyncConfirmDialog({
       open: true,
       type,
       identifier,
       name,
+      clientDiff,
     });
   };
 
@@ -612,74 +622,135 @@ export default function RoleDiff() {
       {/* Sync Confirmation Dialog */}
       <Dialog open={syncConfirmDialog.open} onOpenChange={(open) => {
         if (!open) {
-          setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' });
+          setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '', clientDiff: undefined });
         }
       }}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ArrowLeftRight className="h-5 w-5 text-blue-600" />
-              Confirm Sync Operation
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <ArrowLeftRight className="h-5 w-5 text-blue-600" />
+              </div>
+              Sync {syncConfirmDialog.type === 'role' ? 'Role' : 
+                    syncConfirmDialog.type === 'client' ? 'Client' : 
+                    syncConfirmDialog.type === 'group' ? 'Group' : 
+                    'User'}
             </DialogTitle>
-            <DialogDescription className="pt-2">
-              You are about to sync a {syncConfirmDialog.type} from <strong>{getSourceClusterName()}</strong> to <strong>{getDestinationClusterName()}</strong>.
-            </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <Info className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1 space-y-2">
-                  <p className="text-sm font-semibold text-blue-900">
-                    {syncConfirmDialog.type === 'role' && 'Role'}
-                    {syncConfirmDialog.type === 'client' && 'Client'}
-                    {syncConfirmDialog.type === 'group' && 'Group'}
-                    {syncConfirmDialog.type === 'user' && 'User'}: <span className="font-mono">{syncConfirmDialog.name}</span>
-                  </p>
-                  <div className="text-xs text-blue-800 space-y-1">
-                    {syncConfirmDialog.type === 'role' && (
-                      <>
-                        <p>• The role will be created in the destination cluster with the same name and description.</p>
-                        <p>• Role attributes and composite roles will be preserved.</p>
-                      </>
-                    )}
-                    {syncConfirmDialog.type === 'client' && (
-                      <>
-                        <p>• The client will be exported from the source cluster and imported to the destination cluster.</p>
-                        <p>• All client settings, redirect URIs, scopes, and configurations will be preserved.</p>
-                        <p>• If a client with the same ID already exists, it will be updated.</p>
-                      </>
-                    )}
-                    {syncConfirmDialog.type === 'group' && (
-                      <>
-                        <p>• The group will be created in the destination cluster with the same path and attributes.</p>
-                        <p>• Group members and roles will be preserved.</p>
-                      </>
-                    )}
-                    {syncConfirmDialog.type === 'user' && (
-                      <>
-                        <p>• The user will be created in the destination cluster with the same username and attributes.</p>
-                        <p>• User credentials, roles, and group memberships will be preserved.</p>
-                      </>
-                    )}
-                  </div>
-                </div>
+          
+          <div className="space-y-4 py-2">
+            {/* Source to Destination Flow */}
+            <div className="flex items-center gap-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-gray-500 mb-1">From</p>
+                <p className="text-sm font-semibold text-gray-900 truncate">{getSourceClusterName()}</p>
+              </div>
+              <ArrowRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0 text-right">
+                <p className="text-xs text-gray-500 mb-1">To</p>
+                <p className="text-sm font-semibold text-gray-900 truncate">{getDestinationClusterName()}</p>
               </div>
             </div>
+
+            {/* Item Name */}
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <p className="text-xs text-gray-500 mb-1">
+                {syncConfirmDialog.type === 'role' ? 'Role Name' : 
+                 syncConfirmDialog.type === 'client' ? 'Client ID' : 
+                 syncConfirmDialog.type === 'group' ? 'Group Path' : 
+                 'Username'}
+              </p>
+              <p className="text-sm font-mono font-semibold text-gray-900">{syncConfirmDialog.name}</p>
+            </div>
+
+            {/* Client-specific differences */}
+            {syncConfirmDialog.type === 'client' && syncConfirmDialog.clientDiff && 
+             syncConfirmDialog.clientDiff.differences && syncConfirmDialog.clientDiff.differences.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Changes to be applied:</p>
+                <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                  {syncConfirmDialog.clientDiff.differences.map((field, idx) => {
+                    const sourceVal = syncConfirmDialog.clientDiff?.sourceValue?.[field];
+                    const destVal = syncConfirmDialog.clientDiff?.destinationValue?.[field];
+                    const isArrayField = Array.isArray(sourceVal) || Array.isArray(destVal);
+                    
+                    // Check if this is a scope mapper field
+                    const isScopeMapperField = field.startsWith('scopeMappers_');
+                    const scopeName = isScopeMapperField ? field.replace('scopeMappers_', '') : null;
+                    
+                    if (isArrayField) {
+                      const sourceArray = Array.isArray(sourceVal) ? sourceVal : [];
+                      const destArray = Array.isArray(destVal) ? destVal : [];
+                      const onlyInSource = sourceArray.filter((item: string) => !destArray.includes(item));
+                      const onlyInDest = destArray.filter((item: string) => !sourceArray.includes(item));
+                      
+                      if (onlyInSource.length > 0 || onlyInDest.length > 0) {
+                        const fieldLabel = field === 'defaultClientScopes' ? 'Default Scopes' :
+                                          field === 'optionalClientScopes' ? 'Optional Scopes' :
+                                          field === 'clientRoles' ? 'Client Roles' :
+                                          isScopeMapperField && scopeName ? `Scope Mappers (${scopeName})` :
+                                          field;
+                        
+                        return (
+                          <div key={idx} className="p-3 bg-white border border-gray-200 rounded-lg">
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+                              <span className="text-xs font-semibold text-gray-700">{fieldLabel}</span>
+                              {(onlyInSource.length > 0 || onlyInDest.length > 0) && (
+                                <span className="text-xs text-gray-500">
+                                  ({onlyInSource.length > 0 ? `+${onlyInSource.length}` : ''} {onlyInDest.length > 0 ? `-${onlyInDest.length}` : ''})
+                                </span>
+                              )}
+                            </div>
+                            {onlyInSource.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-[10px] text-gray-600 mb-1">Will be added:</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {onlyInSource.map((item: string, i: number) => (
+                                    <span key={i} className="text-xs px-2 py-1 bg-green-50 text-green-700 rounded-md border border-green-200 font-medium">
+                                      + {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {onlyInDest.length > 0 && (
+                              <div>
+                                <div className="text-[10px] text-gray-600 mb-1">Only in destination (will be kept):</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {onlyInDest.map((item: string, i: number) => (
+                                    <span key={i} className="text-xs px-2 py-1 bg-blue-50 text-blue-700 rounded-md border border-blue-200">
+                                      {item}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+                    }
+                    return null;
+                  })}
+                </div>
+              </div>
+            )}
           </div>
-          <DialogFooter>
+
+          <DialogFooter className="gap-2 sm:gap-0">
             <Button
               variant="outline"
-              onClick={() => setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' })}
+              onClick={() => setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '', clientDiff: undefined })}
+              className="flex-1 sm:flex-initial"
             >
               Cancel
             </Button>
             <Button
               onClick={handleSyncConfirm}
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-blue-600 hover:bg-blue-700 flex-1 sm:flex-initial"
             >
               <ArrowLeftRight className="h-4 w-4 mr-2" />
-              Confirm Sync
+              Sync
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1223,6 +1294,10 @@ function ClientsDiffView({
                                 const sourceVal = diff.sourceValue?.[field];
                                 const destVal = diff.destinationValue?.[field];
                                 
+                                // Check if this is a scope mapper field
+                                const isScopeMapperField = field.startsWith('scopeMappers_');
+                                const scopeName = isScopeMapperField ? field.replace('scopeMappers_', '') : null;
+                                
                                 // For array fields (scopes, roles), highlight differences
                                 const isArrayField = Array.isArray(sourceVal) || Array.isArray(destVal);
                                 let sourceArray: string[] = [];
@@ -1239,9 +1314,21 @@ function ClientsDiffView({
                                   common = sourceArray.filter(item => destArray.includes(item));
                                 }
                                 
+                                // Format field label
+                                let fieldLabel = field;
+                                if (field === 'defaultClientScopes') {
+                                  fieldLabel = 'Default Client Scopes';
+                                } else if (field === 'optionalClientScopes') {
+                                  fieldLabel = 'Optional Client Scopes';
+                                } else if (field === 'clientRoles') {
+                                  fieldLabel = 'Client Roles';
+                                } else if (isScopeMapperField && scopeName) {
+                                  fieldLabel = `Scope Mappers (${scopeName})`;
+                                }
+                                
                                 return (
                                   <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
-                                    <div className="font-medium text-yellow-800 mb-1">{field}:</div>
+                                    <div className="font-medium text-yellow-800 mb-1">{fieldLabel}:</div>
                                     {isArrayField && (onlyInSource.length > 0 || onlyInDest.length > 0) ? (
                                       <div className="mt-1 space-y-1.5">
                                         {onlyInSource.length > 0 && (

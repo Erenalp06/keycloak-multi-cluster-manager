@@ -1,8 +1,10 @@
 package service
 
 import (
+	"fmt"
 	"reflect"
 	"keycloak-multi-manage/internal/domain"
+	"keycloak-multi-manage/internal/client/keycloak"
 )
 
 type DiffService struct {
@@ -111,6 +113,24 @@ func (s *DiffService) GetClientDiff(sourceClusterID, destinationClusterID int) (
 		} else {
 			// Compare configurations
 			differences, sourceVals, destVals := compareClientConfigsDetailed(sourceClient, destClient)
+			
+			// Check scope mapper differences for common scopes
+			scopeMapperDiffs, scopeMapperSourceVals, scopeMapperDestVals := s.compareScopeMappers(
+				sourceClusterID,
+				destinationClusterID,
+				sourceClient,
+				destClient,
+			)
+			if len(scopeMapperDiffs) > 0 {
+				differences = append(differences, scopeMapperDiffs...)
+				for k, v := range scopeMapperSourceVals {
+					sourceVals[k] = v
+				}
+				for k, v := range scopeMapperDestVals {
+					destVals[k] = v
+				}
+			}
+			
 			if len(differences) > 0 {
 				diffs = append(diffs, domain.ClientDiff{
 					Client:          sourceClient,
@@ -416,6 +436,202 @@ func compareUserConfigsDetailed(source, dest domain.UserDetail) ([]string, map[s
 	}
 	
 	return differences, sourceVals, destVals
+}
+
+// compareScopeMappers compares protocol mappers for common client scopes
+func (s *DiffService) compareScopeMappers(sourceClusterID, destClusterID int, sourceClient, destClient domain.ClientDetail) ([]string, map[string]interface{}, map[string]interface{}) {
+	var differences []string
+	sourceVals := make(map[string]interface{})
+	destVals := make(map[string]interface{})
+	
+	// Get clusters
+	sourceCluster, err := s.clusterService.GetByID(sourceClusterID)
+	if err != nil || sourceCluster == nil {
+		return differences, sourceVals, destVals
+	}
+	
+	destCluster, err := s.clusterService.GetByID(destClusterID)
+	if err != nil || destCluster == nil {
+		return differences, sourceVals, destVals
+	}
+	
+	// Get access tokens using keycloak client
+	keycloakClient := keycloak.NewClient()
+	
+	sourceTokenResp, err := keycloakClient.GetClientCredentialsToken(
+		sourceCluster.BaseURL,
+		sourceCluster.Realm,
+		sourceCluster.ClientID,
+		sourceCluster.ClientSecret,
+	)
+	if err != nil {
+		return differences, sourceVals, destVals
+	}
+	sourceToken := sourceTokenResp.AccessToken
+	
+	destTokenResp, err := keycloakClient.GetClientCredentialsToken(
+		destCluster.BaseURL,
+		destCluster.Realm,
+		destCluster.ClientID,
+		destCluster.ClientSecret,
+	)
+	if err != nil {
+		return differences, sourceVals, destVals
+	}
+	destToken := destTokenResp.AccessToken
+	
+	// Find common scopes (both default and optional)
+	commonScopes := make(map[string]bool)
+	for _, scopeName := range sourceClient.DefaultClientScopes {
+		for _, destScopeName := range destClient.DefaultClientScopes {
+			if scopeName == destScopeName {
+				commonScopes[scopeName] = true
+				break
+			}
+		}
+	}
+	for _, scopeName := range sourceClient.OptionalClientScopes {
+		for _, destScopeName := range destClient.OptionalClientScopes {
+			if scopeName == destScopeName {
+				commonScopes[scopeName] = true
+				break
+			}
+		}
+	}
+	
+	// Compare mappers for each common scope
+	for scopeName := range commonScopes {
+		sourceScopeDetails, err := keycloakClient.GetClientScopeDetails(
+			sourceCluster.BaseURL,
+			sourceCluster.Realm,
+			sourceToken,
+			scopeName,
+		)
+		if err != nil {
+			continue
+		}
+		
+		destScopeDetails, err := keycloakClient.GetClientScopeDetails(
+			destCluster.BaseURL,
+			destCluster.Realm,
+			destToken,
+			scopeName,
+		)
+		if err != nil {
+			continue
+		}
+		
+		// Get mappers
+		var sourceMappers []interface{}
+		var destMappers []interface{}
+		
+		if mappers, ok := sourceScopeDetails["protocolMappers"].([]interface{}); ok {
+			sourceMappers = mappers
+		} else {
+			// If protocolMappers is not in the response, fetch it separately
+			if scopeID, ok := sourceScopeDetails["id"].(string); ok && scopeID != "" {
+				if mappers, err := keycloakClient.GetClientScopeMappers(
+					sourceCluster.BaseURL,
+					sourceCluster.Realm,
+					sourceToken,
+					scopeID,
+				); err == nil {
+					// Convert []map[string]interface{} to []interface{}
+					for _, m := range mappers {
+						sourceMappers = append(sourceMappers, m)
+					}
+				}
+			}
+		}
+		
+		if mappers, ok := destScopeDetails["protocolMappers"].([]interface{}); ok {
+			destMappers = mappers
+		} else {
+			// If protocolMappers is not in the response, fetch it separately
+			if scopeID, ok := destScopeDetails["id"].(string); ok && scopeID != "" {
+				if mappers, err := keycloakClient.GetClientScopeMappers(
+					destCluster.BaseURL,
+					destCluster.Realm,
+					destToken,
+					scopeID,
+				); err == nil {
+					// Convert []map[string]interface{} to []interface{}
+					for _, m := range mappers {
+						destMappers = append(destMappers, m)
+					}
+				}
+			}
+		}
+		
+		// Convert to comparable format (by name)
+		sourceMapperMap := make(map[string]interface{})
+		destMapperMap := make(map[string]interface{})
+		
+		for _, m := range sourceMappers {
+			if mapper, ok := m.(map[string]interface{}); ok {
+				if name, ok := mapper["name"].(string); ok {
+					sourceMapperMap[name] = mapper
+				}
+			}
+		}
+		
+		for _, m := range destMappers {
+			if mapper, ok := m.(map[string]interface{}); ok {
+				if name, ok := mapper["name"].(string); ok {
+					destMapperMap[name] = mapper
+				}
+			}
+		}
+		
+		// Compare mappers - check if they have the same mappers with same config
+		hasDiff := false
+		var sourceMapperNames []string
+		var destMapperNames []string
+		
+		// Check mappers in source
+		for name, sourceMapper := range sourceMapperMap {
+			sourceMapperNames = append(sourceMapperNames, name)
+			destMapper, exists := destMapperMap[name]
+			if !exists {
+				hasDiff = true
+			} else {
+				// Compare mapper configs (excluding id)
+				sourceMapperClean := cleanMapperForComparison(sourceMapper.(map[string]interface{}))
+				destMapperClean := cleanMapperForComparison(destMapper.(map[string]interface{}))
+				if !reflect.DeepEqual(sourceMapperClean, destMapperClean) {
+					hasDiff = true
+				}
+			}
+		}
+		
+		// Check mappers in destination that don't exist in source
+		for name := range destMapperMap {
+			destMapperNames = append(destMapperNames, name)
+			if _, exists := sourceMapperMap[name]; !exists {
+				hasDiff = true
+			}
+		}
+		
+		if hasDiff {
+			diffKey := fmt.Sprintf("scopeMappers_%s", scopeName)
+			differences = append(differences, diffKey)
+			sourceVals[diffKey] = sourceMapperNames
+			destVals[diffKey] = destMapperNames
+		}
+	}
+	
+	return differences, sourceVals, destVals
+}
+
+// cleanMapperForComparison removes fields that shouldn't be compared (like id)
+func cleanMapperForComparison(mapper map[string]interface{}) map[string]interface{} {
+	cleaned := make(map[string]interface{})
+	for k, v := range mapper {
+		if k != "id" {
+			cleaned[k] = v
+		}
+	}
+	return cleaned
 }
 
 // Helper functions

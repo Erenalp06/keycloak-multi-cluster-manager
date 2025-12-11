@@ -470,6 +470,245 @@ func (c *Client) CreateClientRole(baseURL, realm, accessToken, clientUUID string
 	return nil
 }
 
+// CreateClientScope creates a new client scope in Keycloak
+// It also creates protocol mappers if they exist in scopeDetails
+func (c *Client) CreateClientScope(baseURL, realm, accessToken string, scopeDetails map[string]interface{}) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/client-scopes", baseURL, realm)
+	
+	// Build scope data from details (exclude protocolMappers as they're added separately)
+	scopeData := map[string]interface{}{
+		"name": scopeDetails["name"],
+	}
+	
+	// Add description if present
+	if desc, ok := scopeDetails["description"].(string); ok && desc != "" {
+		scopeData["description"] = desc
+	}
+	
+	// Add protocol (default to "openid-connect" if not present)
+	protocol := "openid-connect"
+	if proto, ok := scopeDetails["protocol"].(string); ok && proto != "" {
+		protocol = proto
+	}
+	scopeData["protocol"] = protocol
+	
+	// Include attributes if present
+	if attrs, ok := scopeDetails["attributes"].(map[string]interface{}); ok && attrs != nil {
+		scopeData["attributes"] = attrs
+	}
+	
+	jsonData, err := json.Marshal(scopeData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal scope data: %w", err)
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create client scope: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create client scope: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	// Get the scope ID from response or by querying
+	var scopeID string
+	if resp.StatusCode == http.StatusCreated {
+		// Try to get scope ID from Location header
+		location := resp.Header.Get("Location")
+		if location != "" {
+			// Extract ID from location: /admin/realms/{realm}/client-scopes/{id}
+			parts := strings.Split(location, "/")
+			if len(parts) > 0 {
+				scopeID = parts[len(parts)-1]
+			}
+		}
+	}
+	
+	// If we couldn't get ID from header (or scope already exists), fetch it by querying the scope list
+	if scopeID == "" {
+		// Query scope list to get the ID
+		getScopeURL := fmt.Sprintf("%s/admin/realms/%s/client-scopes", baseURL, realm)
+		getReq, err := http.NewRequest("GET", getScopeURL, nil)
+		if err == nil {
+			getReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+			getReq.Header.Set("Content-Type", "application/json")
+			
+			getResp, err := c.httpClient.Do(getReq)
+			if err == nil && getResp.StatusCode == http.StatusOK {
+				var scopes []map[string]interface{}
+				if err := json.NewDecoder(getResp.Body).Decode(&scopes); err == nil {
+					getResp.Body.Close()
+					scopeName := scopeDetails["name"].(string)
+					for _, scope := range scopes {
+						if name, ok := scope["name"].(string); ok && name == scopeName {
+							if id, ok := scope["id"].(string); ok {
+								scopeID = id
+								break
+							}
+						}
+					}
+				} else {
+					getResp.Body.Close()
+				}
+			} else if getResp != nil {
+				getResp.Body.Close()
+			}
+		}
+	}
+	
+	// Create protocol mappers if they exist
+	if scopeID != "" {
+		if mappers, ok := scopeDetails["protocolMappers"].([]interface{}); ok && len(mappers) > 0 {
+			for _, mapperInterface := range mappers {
+				if mapper, ok := mapperInterface.(map[string]interface{}); ok {
+					if err := c.CreateClientScopeMapper(baseURL, realm, accessToken, scopeID, mapper); err != nil {
+						fmt.Printf("Warning: failed to create protocol mapper for scope '%s': %v\n", scopeDetails["name"], err)
+					} else {
+						mapperName, _ := mapper["name"].(string)
+						fmt.Printf("Successfully created protocol mapper '%s' for scope '%s'\n", mapperName, scopeDetails["name"])
+					}
+				}
+			}
+		}
+	}
+	
+	return nil
+}
+
+// GetClientScopeDetails gets details of a client scope by name (public method)
+// It also fetches protocol mappers for the scope
+func (c *Client) GetClientScopeDetails(baseURL, realm, accessToken, scopeName string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/client-scopes", baseURL, realm)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get client scopes: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get client scopes: status %d", resp.StatusCode)
+	}
+	
+	var scopes []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&scopes); err != nil {
+		return nil, fmt.Errorf("failed to decode client scopes: %w", err)
+	}
+	
+	var scopeDetails map[string]interface{}
+	for _, scope := range scopes {
+		if name, ok := scope["name"].(string); ok && name == scopeName {
+			scopeDetails = scope
+			break
+		}
+	}
+	
+	if scopeDetails == nil {
+		return nil, fmt.Errorf("client scope '%s' not found", scopeName)
+	}
+	
+	// Get protocol mappers for this scope
+	scopeID, ok := scopeDetails["id"].(string)
+	if ok && scopeID != "" {
+		mappers, err := c.GetClientScopeMappers(baseURL, realm, accessToken, scopeID)
+		if err == nil {
+			scopeDetails["protocolMappers"] = mappers
+		} else {
+			fmt.Printf("Warning: failed to get protocol mappers for scope '%s': %v\n", scopeName, err)
+		}
+	}
+	
+	return scopeDetails, nil
+}
+
+// GetClientScopeMappers gets protocol mappers for a client scope by scope ID
+func (c *Client) GetClientScopeMappers(baseURL, realm, accessToken, scopeID string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/client-scopes/%s/protocol-mappers/models", baseURL, realm, scopeID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get client scope mappers: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get client scope mappers: status %d", resp.StatusCode)
+	}
+	
+	var mappers []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&mappers); err != nil {
+		return nil, fmt.Errorf("failed to decode client scope mappers: %w", err)
+	}
+	
+	return mappers, nil
+}
+
+// CreateClientScopeMapper creates a protocol mapper for a client scope
+func (c *Client) CreateClientScopeMapper(baseURL, realm, accessToken, scopeID string, mapper map[string]interface{}) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/client-scopes/%s/protocol-mappers/models", baseURL, realm, scopeID)
+	
+	// Build mapper data, excluding id if present (will be generated by Keycloak)
+	mapperData := make(map[string]interface{})
+	for k, v := range mapper {
+		if k != "id" {
+			mapperData[k] = v
+		}
+	}
+	
+	jsonData, err := json.Marshal(mapperData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal mapper data: %w", err)
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to create client scope mapper: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create client scope mapper: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
 // UpdateClientScopes updates client scopes (public method)
 // It merges source scope names with existing destination scopes
 func (c *Client) UpdateClientScopes(baseURL, realm, accessToken, clientUUID, scopeType string, sourceScopeNames []string) error {

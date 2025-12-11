@@ -284,6 +284,65 @@ func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clie
 	}
 
 	// Sync client scopes (default and optional)
+	// First, ensure all scopes exist in destination realm before assigning them to client
+	allScopesToSync := make(map[string]bool)
+	for _, scopeName := range sourceClientDetail.DefaultClientScopes {
+		allScopesToSync[scopeName] = true
+	}
+	for _, scopeName := range sourceClientDetail.OptionalClientScopes {
+		allScopesToSync[scopeName] = true
+	}
+	
+	// For each scope that needs to be synced, check if it exists in destination
+	for scopeName := range allScopesToSync {
+		// Get source scope details
+		sourceScopeDetails, err := s.keycloakClient.GetClientScopeDetails(
+			sourceCluster.BaseURL,
+			sourceCluster.Realm,
+			sourceToken,
+			scopeName,
+		)
+		if err != nil {
+			fmt.Printf("Warning: failed to get source client scope details for '%s': %v\n", scopeName, err)
+			continue
+		}
+		
+		// Try to get the scope from destination - if it fails, it doesn't exist
+		destScopeDetails, err := s.keycloakClient.GetClientScopeDetails(
+			destCluster.BaseURL,
+			destCluster.Realm,
+			destToken,
+			scopeName,
+		)
+		if err != nil {
+			// Scope doesn't exist in destination, create it with all mappers
+			if err := s.keycloakClient.CreateClientScope(
+				destCluster.BaseURL,
+				destCluster.Realm,
+				destToken,
+				sourceScopeDetails,
+			); err != nil {
+				fmt.Printf("Warning: failed to create client scope '%s' in destination realm: %v\n", scopeName, err)
+			} else {
+				fmt.Printf("Successfully created client scope '%s' in destination realm\n", scopeName)
+			}
+		} else {
+			// Scope exists, sync mappers
+			if err := s.syncScopeMappers(
+				sourceCluster,
+				destCluster,
+				sourceToken,
+				destToken,
+				sourceScopeDetails,
+				destScopeDetails,
+				scopeName,
+			); err != nil {
+				fmt.Printf("Warning: failed to sync mappers for scope '%s': %v\n", scopeName, err)
+			}
+		}
+	}
+	
+	// Now sync scopes to client (they should all exist in realm now)
 	// Always sync scopes, even if empty (to ensure consistency)
 	if err := s.keycloakClient.UpdateClientScopes(
 		destCluster.BaseURL,
@@ -309,6 +368,104 @@ func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clie
 		fmt.Printf("Warning: failed to sync optional client scopes for client %s: %v\n", clientID, err)
 	}
 
+	return nil
+}
+
+// syncScopeMappers syncs protocol mappers from source scope to destination scope
+func (s *SyncService) syncScopeMappers(
+	sourceCluster, destCluster *domain.Cluster,
+	sourceToken, destToken string,
+	sourceScopeDetails, destScopeDetails map[string]interface{},
+	scopeName string,
+) error {
+	// Get source mappers
+	var sourceMappers []map[string]interface{}
+	if mappers, ok := sourceScopeDetails["protocolMappers"].([]interface{}); ok {
+		for _, m := range mappers {
+			if mapper, ok := m.(map[string]interface{}); ok {
+				sourceMappers = append(sourceMappers, mapper)
+			}
+		}
+	} else {
+		// If protocolMappers is not in the response, fetch it separately
+		if scopeID, ok := sourceScopeDetails["id"].(string); ok && scopeID != "" {
+			if mappers, err := s.keycloakClient.GetClientScopeMappers(
+				sourceCluster.BaseURL,
+				sourceCluster.Realm,
+				sourceToken,
+				scopeID,
+			); err == nil {
+				sourceMappers = mappers
+			}
+		}
+	}
+	
+	// Get destination mappers
+	var destMappers []map[string]interface{}
+	if mappers, ok := destScopeDetails["protocolMappers"].([]interface{}); ok {
+		for _, m := range mappers {
+			if mapper, ok := m.(map[string]interface{}); ok {
+				destMappers = append(destMappers, mapper)
+			}
+		}
+	} else {
+		// If protocolMappers is not in the response, fetch it separately
+		if scopeID, ok := destScopeDetails["id"].(string); ok && scopeID != "" {
+			if mappers, err := s.keycloakClient.GetClientScopeMappers(
+				destCluster.BaseURL,
+				destCluster.Realm,
+				destToken,
+				scopeID,
+			); err == nil {
+				destMappers = mappers
+			}
+		}
+	}
+	
+	// Create a map of destination mapper names for quick lookup
+	destMapperMap := make(map[string]map[string]interface{})
+	for _, mapper := range destMappers {
+		if name, ok := mapper["name"].(string); ok {
+			destMapperMap[name] = mapper
+		}
+	}
+	
+	// Get destination scope ID
+	destScopeID, ok := destScopeDetails["id"].(string)
+	if !ok || destScopeID == "" {
+		return fmt.Errorf("destination scope ID not found for scope '%s'", scopeName)
+	}
+	
+	// Sync each source mapper to destination
+	for _, sourceMapper := range sourceMappers {
+		mapperName, ok := sourceMapper["name"].(string)
+		if !ok || mapperName == "" {
+			continue
+		}
+		
+		_, exists := destMapperMap[mapperName]
+		if !exists {
+			// Mapper doesn't exist in destination, create it
+			if err := s.keycloakClient.CreateClientScopeMapper(
+				destCluster.BaseURL,
+				destCluster.Realm,
+				destToken,
+				destScopeID,
+				sourceMapper,
+			); err != nil {
+				fmt.Printf("Warning: failed to create mapper '%s' for scope '%s': %v\n", mapperName, scopeName, err)
+			} else {
+				fmt.Printf("Successfully created mapper '%s' for scope '%s'\n", mapperName, scopeName)
+			}
+		} else {
+			// Mapper exists, check if config is different
+			// For now, we'll skip updating existing mappers as it requires DELETE + CREATE
+			// or PUT with full mapper config. This can be enhanced later if needed.
+			// Just log that mapper already exists
+			fmt.Printf("Mapper '%s' already exists in scope '%s', skipping\n", mapperName, scopeName)
+		}
+	}
+	
 	return nil
 }
 

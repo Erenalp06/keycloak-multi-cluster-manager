@@ -67,6 +67,7 @@ export default function ClusterList() {
     base_url: '',
     username: '',
     password: '',
+    skip_tls_verify: false,
   });
   const [discoveredRealms, setDiscoveredRealms] = useState<RealmInfo[]>([]);
   const [discovering, setDiscovering] = useState(false);
@@ -284,6 +285,7 @@ export default function ClusterList() {
         base_url: '',
         username: '',
         password: '',
+        skip_tls_verify: false,
       });
       setAddMode('manual');
       loadClusters();
@@ -1037,6 +1039,18 @@ export default function ClusterList() {
                         onChange={(e) => setDiscoverFormData({ ...discoverFormData, password: e.target.value })}
                         placeholder="password"
                       />
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="discover_skip_tls"
+                        checked={discoverFormData.skip_tls_verify || false}
+                        onChange={(e) => setDiscoverFormData({ ...discoverFormData, skip_tls_verify: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label htmlFor="discover_skip_tls" className="text-sm cursor-pointer">
+                        Skip TLS Verification
+                      </Label>
                     </div>
                     <Button
                       onClick={handleDiscover}

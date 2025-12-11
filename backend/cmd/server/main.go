@@ -50,6 +50,7 @@ func main() {
 	appRoleService := service.NewAppRoleService(appRoleRepo, permissionRepo)
 	ldapConfigService := service.NewLDAPConfigService(ldapConfigRepo, certService)
 	environmentTagService := service.NewEnvironmentTagService(environmentTagRepo, clusterRepo)
+	userFederationService := service.NewUserFederationService(clusterRepo)
 	
 	// Initialize handlers
 	clusterHandler := handler.NewClusterHandler(clusterService)
@@ -62,6 +63,7 @@ func main() {
 	appRoleHandler := handler.NewAppRoleHandler(appRoleService)
 	ldapConfigHandler := handler.NewLDAPConfigHandler(ldapConfigService)
 	environmentTagHandler := handler.NewEnvironmentTagHandler(environmentTagService)
+	userFederationHandler := handler.NewUserFederationHandler(userFederationService)
 	
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -213,6 +215,18 @@ func main() {
 	envTags.Post("/assign", environmentTagHandler.AssignTagsToClusters)
 	envTags.Post("/remove", environmentTagHandler.RemoveTagsFromClusters)
 	envTags.Get("/clusters/:clusterId", environmentTagHandler.GetTagsByClusterID)
+	
+	// User Federation routes (for managing LDAP providers in Keycloak realms)
+	userFederation := protected.Group("/clusters/:id/user-federation", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"))
+	userFederation.Get("/", userFederationHandler.GetUserFederationProviders)
+	userFederation.Get("/:providerId", userFederationHandler.GetUserFederationProvider)
+	userFederation.Post("/", middleware.PermissionMiddleware(appRoleService, "sync_items"), userFederationHandler.CreateUserFederationProvider)
+	userFederation.Put("/:providerId", middleware.PermissionMiddleware(appRoleService, "sync_items"), userFederationHandler.UpdateUserFederationProvider)
+	userFederation.Delete("/:providerId", middleware.PermissionMiddleware(appRoleService, "sync_items"), userFederationHandler.DeleteUserFederationProvider)
+	userFederation.Post("/:providerId/test", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), userFederationHandler.TestUserFederationConnection)
+	userFederation.Post("/:providerId/sync", middleware.PermissionMiddleware(appRoleService, "sync_items"), userFederationHandler.SyncUserFederation)
+	userFederation.Post("/test-connection", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), userFederationHandler.TestLDAPConnection)
+	userFederation.Post("/test-authentication", middleware.PermissionMiddleware(appRoleService, "view_cluster_detail"), userFederationHandler.TestLDAPAuthentication)
 	
 	// Start server
 	port := os.Getenv("SERVER_PORT")

@@ -157,12 +157,159 @@ func (s *SyncService) SyncClient(sourceClusterID, destinationClusterID int, clie
 	
 	// Import only the specific client to destination
 	clientsToImport := []map[string]interface{}{clientToSync}
-	return s.keycloakClient.ImportClients(
+	if err := s.keycloakClient.ImportClients(
 		destCluster.BaseURL,
 		destCluster.Realm,
 		destToken,
 		clientsToImport,
+	); err != nil {
+		return fmt.Errorf("failed to import client: %w", err)
+	}
+
+	// After client import, sync client roles
+	// Get source client details to get client roles
+	sourceClientDetails, err := s.keycloakClient.GetClientDetails(
+		sourceCluster.BaseURL,
+		sourceCluster.Realm,
+		sourceToken,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to get source client details: %w", err)
+	}
+
+	var sourceClientDetail *domain.ClientDetail
+	for _, client := range sourceClientDetails {
+		if client.ClientID == clientID {
+			sourceClientDetail = &client
+			break
+		}
+	}
+
+	if sourceClientDetail == nil {
+		return fmt.Errorf("source client detail not found")
+	}
+
+	// Get destination client UUID
+	destClients, err := s.keycloakClient.GetClients(
+		destCluster.BaseURL,
+		destCluster.Realm,
+		destToken,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination clients: %w", err)
+	}
+
+	var destClientUUID string
+	for _, client := range destClients {
+		if clientIDStr, ok := client["clientId"].(string); ok && clientIDStr == clientID {
+			if uuid, ok := client["id"].(string); ok {
+				destClientUUID = uuid
+				break
+			}
+		}
+	}
+
+	if destClientUUID == "" {
+		return fmt.Errorf("destination client UUID not found after import")
+	}
+
+	// Get destination client roles
+	destClientRoles, err := s.keycloakClient.GetClientRoles(
+		destCluster.BaseURL,
+		destCluster.Realm,
+		destToken,
+		destClientUUID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to get destination client roles: %w", err)
+	}
+
+	// Create a map of destination client role names
+	destRoleMap := make(map[string]bool)
+	for _, role := range destClientRoles {
+		if roleName, ok := role["name"].(string); ok {
+			destRoleMap[roleName] = true
+		}
+	}
+
+	// Sync missing client roles from source to destination
+	for _, roleName := range sourceClientDetail.ClientRoles {
+		if !destRoleMap[roleName] {
+			// Get full role details from source
+			sourceClientUUID := sourceClientDetail.ID
+			sourceRoles, err := s.keycloakClient.GetClientRoles(
+				sourceCluster.BaseURL,
+				sourceCluster.Realm,
+				sourceToken,
+				sourceClientUUID,
+			)
+			if err != nil {
+				continue // Skip if we can't get source roles
+			}
+
+			var sourceRole map[string]interface{}
+			for _, role := range sourceRoles {
+				if name, ok := role["name"].(string); ok && name == roleName {
+					sourceRole = role
+					break
+				}
+			}
+
+			if sourceRole == nil {
+				continue
+			}
+
+			// Create role in destination
+			roleName, _ := sourceRole["name"].(string)
+			roleDesc, _ := sourceRole["description"].(string)
+			roleComposite, _ := sourceRole["composite"].(bool)
+			
+			role := domain.Role{
+				Name:        roleName,
+				Description: roleDesc,
+				Composite:   roleComposite,
+			}
+
+			if err := s.keycloakClient.CreateClientRole(
+				destCluster.BaseURL,
+				destCluster.Realm,
+				destToken,
+				destClientUUID,
+				role,
+			); err != nil {
+				// Log error but continue with other roles
+				fmt.Printf("Warning: failed to create client role %s: %v\n", roleName, err)
+			}
+		}
+	}
+
+	// Sync client scopes (default and optional)
+	// Always sync scopes, even if empty (to ensure consistency)
+	if err := s.keycloakClient.UpdateClientScopes(
+		destCluster.BaseURL,
+		destCluster.Realm,
+		destToken,
+		destClientUUID,
+		"default",
+		sourceClientDetail.DefaultClientScopes,
+	); err != nil {
+		// Log error but don't fail the entire sync
+		fmt.Printf("Warning: failed to sync default client scopes for client %s: %v\n", clientID, err)
+	}
+
+	if err := s.keycloakClient.UpdateClientScopes(
+		destCluster.BaseURL,
+		destCluster.Realm,
+		destToken,
+		destClientUUID,
+		"optional",
+		sourceClientDetail.OptionalClientScopes,
+	); err != nil {
+		// Log error but don't fail the entire sync
+		fmt.Printf("Warning: failed to sync optional client scopes for client %s: %v\n", clientID, err)
+	}
+
+	return nil
 }
 
 // SyncGroup syncs a group from source cluster to destination cluster

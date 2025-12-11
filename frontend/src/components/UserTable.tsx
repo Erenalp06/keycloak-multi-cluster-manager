@@ -66,6 +66,7 @@ export default function UserTable({
               <TableHead className="text-xs">Username</TableHead>
               <TableHead className="text-xs">Email</TableHead>
               <TableHead className="text-xs">Name</TableHead>
+              <TableHead className="text-xs">Origin</TableHead>
               <TableHead className="text-xs">Status</TableHead>
               <TableHead className="text-xs">Roles</TableHead>
               <TableHead className="text-xs w-[50px]"></TableHead>
@@ -82,6 +83,15 @@ export default function UserTable({
                 <TableCell className="text-xs">{user.email || '-'}</TableCell>
                 <TableCell className="text-xs">
                   {[user.firstName, user.lastName].filter(Boolean).join(' ') || '-'}
+                </TableCell>
+                <TableCell className="text-xs">
+                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    user.origin === 'federation'
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {user.origin === 'federation' ? 'Federation' : 'Local'}
+                  </span>
                 </TableCell>
                 <TableCell className="text-xs">
                   <span className={`px-2 py-0.5 rounded text-xs ${

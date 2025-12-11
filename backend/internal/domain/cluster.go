@@ -72,9 +72,10 @@ type PrometheusMetrics struct {
 }
 
 type DiscoverRealmsRequest struct {
-	BaseURL  string `json:"base_url" validate:"required,url"`
-	Username string `json:"username" validate:"required"`  // Master realm admin
-	Password string `json:"password" validate:"required"`  // Master realm admin
+	BaseURL       string `json:"base_url" validate:"required,url"`
+	Username      string `json:"username" validate:"required"`  // Master realm admin
+	Password      string `json:"password" validate:"required"`  // Master realm admin
+	SkipTLSVerify bool   `json:"skip_tls_verify"`               // Skip TLS certificate verification
 }
 
 type RealmInfo struct {

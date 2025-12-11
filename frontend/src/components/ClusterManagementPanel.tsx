@@ -17,13 +17,14 @@ import ClientTable from '@/components/ClientTable';
 import UserDetailSlideOver from '@/components/UserDetailSlideOver';
 import GroupDetailSlideOver from '@/components/GroupDetailSlideOver';
 import ClientDetailSlideOver from '@/components/ClientDetailSlideOver';
+import UserFederationManagement from '@/components/UserFederationManagement';
 
 interface ClusterManagementPanelProps {
   cluster: Cluster;
 }
 
 export default function ClusterManagementPanel({ cluster }: ClusterManagementPanelProps) {
-  const [activeTab, setActiveTab] = useState<'realm' | 'users' | 'roles' | 'groups'>('realm');
+  const [activeTab, setActiveTab] = useState<'realm' | 'users' | 'roles' | 'groups' | 'user-federation'>('realm');
   
   // Data states
   const [users, setUsers] = useState<UserDetail[]>([]);
@@ -605,7 +606,7 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
       )}
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="realm" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
             Realm
@@ -621,6 +622,10 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
           <TabsTrigger value="groups" className="flex items-center gap-2">
             <Folder className="h-4 w-4" />
             Groups
+          </TabsTrigger>
+          <TabsTrigger value="user-federation" className="flex items-center gap-2">
+            <Building2 className="h-4 w-4" />
+            User Federation
           </TabsTrigger>
         </TabsList>
 
@@ -1071,6 +1076,11 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
               />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* User Federation Tab */}
+        <TabsContent value="user-federation" className="mt-4">
+          <UserFederationManagement cluster={cluster} realm={cluster.realm} />
         </TabsContent>
       </Tabs>
 

@@ -31,10 +31,10 @@ type TabType = 'summary' | 'roles' | 'clients' | 'groups' | 'users';
 
 export default function RoleDiff() {
   const [clusters, setClusters] = useState<Cluster[]>([]);
-  const [sourceId, setSourceId] = useState<string>('');
-  const [destinationId, setDestinationId] = useState<string>('');
-  const [sourceGroup, setSourceGroup] = useState<string>('');
-  const [destinationGroup, setDestinationGroup] = useState<string>('');
+  const [sourceInstance, setSourceInstance] = useState<string>('');
+  const [destinationInstance, setDestinationInstance] = useState<string>('');
+  const [sourceRealm, setSourceRealm] = useState<string>('');
+  const [destinationRealm, setDestinationRealm] = useState<string>('');
   const [twoWayComparison, setTwoWayComparison] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<TabType>('summary');
   const [loading, setLoading] = useState(true);
@@ -91,12 +91,15 @@ export default function RoleDiff() {
   };
 
   const handleDiff = async () => {
-    if (!sourceId || !destinationId) {
+    const sourceClusterId = sourceInstance && sourceRealm ? findClusterId(sourceInstance, sourceRealm) : null;
+    const destClusterId = destinationInstance && destinationRealm ? findClusterId(destinationInstance, destinationRealm) : null;
+    
+    if (!sourceClusterId || !destClusterId) {
       alert('Please select both source and destination clusters');
       return;
     }
 
-    if (sourceId === destinationId) {
+    if (sourceClusterId === destClusterId) {
       alert('Source and destination clusters must be different');
       return;
     }
@@ -106,10 +109,10 @@ export default function RoleDiff() {
       
       // Load all diffs in parallel
       const [roleDiffData, clientDiffData, groupDiffData, userDiffData] = await Promise.all([
-        diffApi.getRoleDiff(Number(sourceId), Number(destinationId)).catch(() => []),
-        diffApi.getClientDiff(Number(sourceId), Number(destinationId)).catch(() => []),
-        diffApi.getGroupDiff(Number(sourceId), Number(destinationId)).catch(() => []),
-        diffApi.getUserDiff(Number(sourceId), Number(destinationId)).catch(() => []),
+        diffApi.getRoleDiff(sourceClusterId, destClusterId).catch(() => []),
+        diffApi.getClientDiff(sourceClusterId, destClusterId).catch(() => []),
+        diffApi.getGroupDiff(sourceClusterId, destClusterId).catch(() => []),
+        diffApi.getUserDiff(sourceClusterId, destClusterId).catch(() => []),
       ]);
 
       setRoleDiffs(roleDiffData || []);
@@ -124,14 +127,14 @@ export default function RoleDiff() {
         sourceGroupsData, destGroupsData,
         sourceUsersData, destUsersData,
       ] = await Promise.all([
-        roleApi.getRoles(Number(sourceId)).catch(() => []),
-        roleApi.getRoles(Number(destinationId)).catch(() => []),
-        clusterApi.getClientDetails(Number(sourceId)).catch(() => []),
-        clusterApi.getClientDetails(Number(destinationId)).catch(() => []),
-        clusterApi.getGroupDetails(Number(sourceId)).catch(() => []),
-        clusterApi.getGroupDetails(Number(destinationId)).catch(() => []),
-        clusterApi.getUserDetails(Number(sourceId)).catch(() => []),
-        clusterApi.getUserDetails(Number(destinationId)).catch(() => []),
+        roleApi.getRoles(sourceClusterId).catch(() => []),
+        roleApi.getRoles(destClusterId).catch(() => []),
+        clusterApi.getClientDetails(sourceClusterId).catch(() => []),
+        clusterApi.getClientDetails(destClusterId).catch(() => []),
+        clusterApi.getGroupDetails(sourceClusterId).catch(() => []),
+        clusterApi.getGroupDetails(destClusterId).catch(() => []),
+        clusterApi.getUserDetails(sourceClusterId).catch(() => []),
+        clusterApi.getUserDetails(destClusterId).catch(() => []),
       ]);
       
       setSourceRoles(sourceRolesData || []);
@@ -152,11 +155,15 @@ export default function RoleDiff() {
   };
 
   const getSourceClusterName = () => {
-    return clusters.find((c) => c.id === Number(sourceId))?.name || '';
+    if (!sourceInstance || !sourceRealm) return '';
+    const cluster = clusters.find((c) => c.base_url === sourceInstance && c.realm === sourceRealm);
+    return cluster?.name || `${sourceInstance} - ${sourceRealm}`;
   };
 
   const getDestinationClusterName = () => {
-    return clusters.find((c) => c.id === Number(destinationId))?.name || '';
+    if (!destinationInstance || !destinationRealm) return '';
+    const cluster = clusters.find((c) => c.base_url === destinationInstance && c.realm === destinationRealm);
+    return cluster?.name || `${destinationInstance} - ${destinationRealm}`;
   };
 
   const getRoleStatus = (roleName: string) => {
@@ -226,34 +233,49 @@ export default function RoleDiff() {
     return 'none';
   };
 
-  // Group clusters
-  const groupedClusters = () => {
-    const groups: Record<string, Cluster[]> = {};
-    const ungrouped: Cluster[] = [];
-
-    clusters.forEach((cluster) => {
-      if (cluster.group_name && cluster.group_name.trim() !== '') {
-        if (!groups[cluster.group_name]) {
-          groups[cluster.group_name] = [];
-        }
-        groups[cluster.group_name].push(cluster);
-      } else {
-        ungrouped.push(cluster);
+  // Group clusters by base_url (instances)
+  const getInstances = () => {
+    const instanceMap = new Map<string, Cluster[]>();
+    clusters.forEach(cluster => {
+      const baseUrl = cluster.base_url;
+      if (!instanceMap.has(baseUrl)) {
+        instanceMap.set(baseUrl, []);
       }
+      instanceMap.get(baseUrl)!.push(cluster);
     });
-
-    return { groups, ungrouped };
+    return Array.from(instanceMap.entries()).map(([baseUrl, clusters]) => ({
+      baseUrl,
+      clusters,
+      name: clusters[0]?.name?.split(' - ')[0] || baseUrl, // Use first cluster name or baseUrl
+    }));
   };
 
-  const getFilteredClusters = (groupName?: string): Cluster[] => {
-    if (!groupName || groupName === '' || groupName === '__all__') {
-      return clusters;
-    }
-    return clusters.filter(c => c.group_name === groupName);
+  // Get realms for a specific instance
+  const getRealmsForInstance = (baseUrl: string) => {
+    return clusters
+      .filter(c => c.base_url === baseUrl)
+      .map(c => ({
+        realm: c.realm,
+        clusterId: c.id,
+        clusterName: c.name,
+      }))
+      .filter((realm, index, self) => 
+        index === self.findIndex(r => r.realm === realm.realm)
+      ); // Remove duplicates
   };
+
+  // Find cluster ID from instance and realm
+  const findClusterId = (baseUrl: string, realm: string): number | null => {
+    const cluster = clusters.find(c => c.base_url === baseUrl && c.realm === realm);
+    return cluster ? cluster.id : null;
+  };
+
 
   const handleSyncClick = (type: 'role' | 'client' | 'group' | 'user', identifier: string, name: string) => {
-    if (!sourceId || !destinationId) {
+    const sourceClusterId = sourceInstance && sourceRealm ? findClusterId(sourceInstance, sourceRealm) : null;
+    const destClusterId = destinationInstance && destinationRealm ? findClusterId(destinationInstance, destinationRealm) : null;
+    
+    if (!sourceClusterId || !destClusterId) {
       alert('Please select both source and destination clusters');
       return;
     }
@@ -267,7 +289,10 @@ export default function RoleDiff() {
 
   const handleSyncConfirm = async () => {
     const { type, identifier } = syncConfirmDialog;
-    if (!type || !sourceId || !destinationId) return;
+    const sourceClusterId = sourceInstance && sourceRealm ? findClusterId(sourceInstance, sourceRealm) : null;
+    const destClusterId = destinationInstance && destinationRealm ? findClusterId(destinationInstance, destinationRealm) : null;
+    
+    if (!type || !sourceClusterId || !destClusterId) return;
 
     setSyncConfirmDialog({ open: false, type: null, identifier: '', name: '' });
     const syncKey = `${type}-${identifier}`;
@@ -276,16 +301,16 @@ export default function RoleDiff() {
     try {
       switch (type) {
         case 'role':
-          await syncApi.syncRole(Number(sourceId), Number(destinationId), identifier);
+          await syncApi.syncRole(sourceClusterId, destClusterId, identifier);
           break;
         case 'client':
-          await syncApi.syncClient(Number(sourceId), Number(destinationId), identifier);
+          await syncApi.syncClient(sourceClusterId, destClusterId, identifier);
           break;
         case 'group':
-          await syncApi.syncGroup(Number(sourceId), Number(destinationId), identifier);
+          await syncApi.syncGroup(sourceClusterId, destClusterId, identifier);
           break;
         case 'user':
-          await syncApi.syncUser(Number(sourceId), Number(destinationId), identifier);
+          await syncApi.syncUser(sourceClusterId, destClusterId, identifier);
           break;
       }
       
@@ -335,7 +360,7 @@ export default function RoleDiff() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base font-semibold text-gray-900">Select Clusters</CardTitle>
           <CardDescription className="text-xs text-gray-500 mt-0.5">
-            Choose source and destination clusters to compare. You can filter by group or select directly.
+            Choose source and destination clusters to compare. First select instance, then realm.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -343,21 +368,21 @@ export default function RoleDiff() {
             {/* Source Selection */}
             <div className="space-y-3">
               <div className="grid gap-2">
-                <Label htmlFor="source-group" className="text-sm">Source Group (Optional)</Label>
-                <Select value={sourceGroup || '__all__'} onValueChange={(val) => {
-                  setSourceGroup(val === '__all__' ? '' : val);
-                  setSourceId(''); // Reset cluster selection when group changes
+                <Label htmlFor="source-instance" className="text-sm">Source Instance</Label>
+                <Select value={sourceInstance} onValueChange={(val) => {
+                  setSourceInstance(val);
+                  setSourceRealm(''); // Reset realm when instance changes
                 }}>
-                  <SelectTrigger id="source-group" className="h-9">
-                    <SelectValue placeholder="All clusters" />
+                  <SelectTrigger id="source-instance" className="h-9">
+                    <SelectValue placeholder="Select instance" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__all__">All clusters</SelectItem>
-                    {Object.keys(groupedClusters().groups).map((groupName) => (
-                      <SelectItem key={groupName} value={groupName}>
+                    {getInstances().map((instance) => (
+                      <SelectItem key={instance.baseUrl} value={instance.baseUrl}>
                         <div className="flex items-center gap-2">
-                          <Folder className="h-3 w-3" />
-                          {groupName} ({groupedClusters().groups[groupName].length})
+                          <Building2 className="h-3 w-3" />
+                          <span className="font-medium">{instance.name}</span>
+                          <span className="text-xs text-gray-500">({instance.clusters.length} realms)</span>
                         </div>
                       </SelectItem>
                     ))}
@@ -365,24 +390,27 @@ export default function RoleDiff() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="source" className="text-sm">Source Cluster</Label>
-                <Select value={sourceId} onValueChange={setSourceId}>
-                  <SelectTrigger id="source" className="h-9">
-                    <SelectValue placeholder="Select source cluster" />
+                <Label htmlFor="source-realm" className="text-sm">Source Realm</Label>
+                <Select 
+                  value={sourceRealm} 
+                  onValueChange={setSourceRealm}
+                  disabled={!sourceInstance}
+                >
+                  <SelectTrigger id="source-realm" className="h-9">
+                    <SelectValue placeholder={sourceInstance ? "Select realm" : "Select instance first"} />
                   </SelectTrigger>
-                          <SelectContent>
-                            {getFilteredClusters(sourceGroup || undefined).map((cluster) => (
-                              <SelectItem key={cluster.id} value={cluster.id.toString()}>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{cluster.name}</span>
-                                  <span className="text-xs text-gray-500">• Realm: {cluster.realm}</span>
-                                  {cluster.group_name && (
-                                    <span className="text-xs text-blue-600">• Group: {cluster.group_name}</span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
+                  <SelectContent>
+                    {sourceInstance && getRealmsForInstance(sourceInstance).map((realm) => (
+                      <SelectItem key={realm.realm} value={realm.realm}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{realm.realm}</span>
+                          {realm.clusterName && (
+                            <span className="text-xs text-gray-500">• {realm.clusterName}</span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
             </div>
@@ -390,21 +418,21 @@ export default function RoleDiff() {
             {/* Destination Selection */}
             <div className="space-y-3">
               <div className="grid gap-2">
-                <Label htmlFor="destination-group" className="text-sm">Destination Group (Optional)</Label>
-                <Select value={destinationGroup || '__all__'} onValueChange={(val) => {
-                  setDestinationGroup(val === '__all__' ? '' : val);
-                  setDestinationId(''); // Reset cluster selection when group changes
+                <Label htmlFor="destination-instance" className="text-sm">Destination Instance</Label>
+                <Select value={destinationInstance} onValueChange={(val) => {
+                  setDestinationInstance(val);
+                  setDestinationRealm(''); // Reset realm when instance changes
                 }}>
-                  <SelectTrigger id="destination-group" className="h-9">
-                    <SelectValue placeholder="All clusters" />
+                  <SelectTrigger id="destination-instance" className="h-9">
+                    <SelectValue placeholder="Select instance" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__all__">All clusters</SelectItem>
-                    {Object.keys(groupedClusters().groups).map((groupName) => (
-                      <SelectItem key={groupName} value={groupName}>
+                    {getInstances().map((instance) => (
+                      <SelectItem key={instance.baseUrl} value={instance.baseUrl}>
                         <div className="flex items-center gap-2">
-                          <Folder className="h-3 w-3" />
-                          {groupName} ({groupedClusters().groups[groupName].length})
+                          <Building2 className="h-3 w-3" />
+                          <span className="font-medium">{instance.name}</span>
+                          <span className="text-xs text-gray-500">({instance.clusters.length} realms)</span>
                         </div>
                       </SelectItem>
                     ))}
@@ -412,24 +440,27 @@ export default function RoleDiff() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="destination" className="text-sm">Destination Cluster</Label>
-                <Select value={destinationId} onValueChange={setDestinationId}>
-                  <SelectTrigger id="destination" className="h-9">
-                    <SelectValue placeholder="Select destination cluster" />
+                <Label htmlFor="destination-realm" className="text-sm">Destination Realm</Label>
+                <Select 
+                  value={destinationRealm} 
+                  onValueChange={setDestinationRealm}
+                  disabled={!destinationInstance}
+                >
+                  <SelectTrigger id="destination-realm" className="h-9">
+                    <SelectValue placeholder={destinationInstance ? "Select realm" : "Select instance first"} />
                   </SelectTrigger>
-                          <SelectContent>
-                            {getFilteredClusters(destinationGroup || undefined).map((cluster) => (
-                              <SelectItem key={cluster.id} value={cluster.id.toString()}>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{cluster.name}</span>
-                                  <span className="text-xs text-gray-500">• Realm: {cluster.realm}</span>
-                                  {cluster.group_name && (
-                                    <span className="text-xs text-blue-600">• Group: {cluster.group_name}</span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
+                  <SelectContent>
+                    {destinationInstance && getRealmsForInstance(destinationInstance).map((realm) => (
+                      <SelectItem key={realm.realm} value={realm.realm}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{realm.realm}</span>
+                          {realm.clusterName && (
+                            <span className="text-xs text-gray-500">• {realm.clusterName}</span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
             </div>
@@ -464,7 +495,7 @@ export default function RoleDiff() {
 
           <Button
             onClick={handleDiff}
-            disabled={loadingDiff || !sourceId || !destinationId}
+            disabled={loadingDiff || !sourceInstance || !sourceRealm || !destinationInstance || !destinationRealm}
             className="bg-[#4a5568] hover:bg-[#374151] text-white text-sm h-9 w-full"
           >
             <Search className="mr-1.5 h-4 w-4" />
@@ -474,7 +505,7 @@ export default function RoleDiff() {
       </Card>
 
       {/* Tabs */}
-      {sourceId && destinationId && (
+      {sourceInstance && sourceRealm && destinationInstance && destinationRealm && (
         <div className="mb-6">
           <div className="flex space-x-1 border-b border-gray-200">
             {tabs.map((tab) => {
@@ -1191,23 +1222,81 @@ function ClientsDiffView({
                               {diff.differences.map((field, idx) => {
                                 const sourceVal = diff.sourceValue?.[field];
                                 const destVal = diff.destinationValue?.[field];
+                                
+                                // For array fields (scopes, roles), highlight differences
+                                const isArrayField = Array.isArray(sourceVal) || Array.isArray(destVal);
+                                let sourceArray: string[] = [];
+                                let destArray: string[] = [];
+                                let onlyInSource: string[] = [];
+                                let onlyInDest: string[] = [];
+                                let common: string[] = [];
+                                
+                                if (isArrayField) {
+                                  sourceArray = Array.isArray(sourceVal) ? sourceVal : [];
+                                  destArray = Array.isArray(destVal) ? destVal : [];
+                                  onlyInSource = sourceArray.filter(item => !destArray.includes(item));
+                                  onlyInDest = destArray.filter(item => !sourceArray.includes(item));
+                                  common = sourceArray.filter(item => destArray.includes(item));
+                                }
+                                
                                 return (
-                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
-                                    <div className="font-medium text-yellow-800">{field}:</div>
-                                    <div className="grid grid-cols-2 gap-2 mt-0.5">
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Source:</div>
-                                        <div className="text-[10px] text-red-700 font-mono break-words">
-                                          {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+                                    <div className="font-medium text-yellow-800 mb-1">{field}:</div>
+                                    {isArrayField && (onlyInSource.length > 0 || onlyInDest.length > 0) ? (
+                                      <div className="mt-1 space-y-1.5">
+                                        {onlyInSource.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Source (will be added):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInSource.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded border border-green-300 font-medium">
+                                                  + {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {onlyInDest.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Destination (will be kept):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInDest.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded border border-blue-300">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {common.length > 0 && (
+                                          <div className="pt-1 border-t border-yellow-300">
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Common (in both):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {common.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="grid grid-cols-2 gap-2 mt-0.5">
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Source:</div>
+                                          <div className="text-[10px] text-red-700 font-mono break-words">
+                                            {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Destination:</div>
+                                          <div className="text-[10px] text-blue-700 font-mono break-words">
+                                            {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
+                                          </div>
                                         </div>
                                       </div>
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Destination:</div>
-                                        <div className="text-[10px] text-blue-700 font-mono break-words">
-                                          {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
-                                        </div>
-                                      </div>
-                                    </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -1407,23 +1496,81 @@ function GroupsDiffView({
                               {diff.differences.map((field, idx) => {
                                 const sourceVal = diff.sourceValue?.[field];
                                 const destVal = diff.destinationValue?.[field];
+                                
+                                // For array fields (scopes, roles), highlight differences
+                                const isArrayField = Array.isArray(sourceVal) || Array.isArray(destVal);
+                                let sourceArray: string[] = [];
+                                let destArray: string[] = [];
+                                let onlyInSource: string[] = [];
+                                let onlyInDest: string[] = [];
+                                let common: string[] = [];
+                                
+                                if (isArrayField) {
+                                  sourceArray = Array.isArray(sourceVal) ? sourceVal : [];
+                                  destArray = Array.isArray(destVal) ? destVal : [];
+                                  onlyInSource = sourceArray.filter(item => !destArray.includes(item));
+                                  onlyInDest = destArray.filter(item => !sourceArray.includes(item));
+                                  common = sourceArray.filter(item => destArray.includes(item));
+                                }
+                                
                                 return (
-                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
-                                    <div className="font-medium text-yellow-800">{field}:</div>
-                                    <div className="grid grid-cols-2 gap-2 mt-0.5">
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Source:</div>
-                                        <div className="text-[10px] text-red-700 font-mono break-words">
-                                          {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+                                    <div className="font-medium text-yellow-800 mb-1">{field}:</div>
+                                    {isArrayField && (onlyInSource.length > 0 || onlyInDest.length > 0) ? (
+                                      <div className="mt-1 space-y-1.5">
+                                        {onlyInSource.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Source (will be added):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInSource.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded border border-green-300 font-medium">
+                                                  + {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {onlyInDest.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Destination (will be kept):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInDest.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded border border-blue-300">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {common.length > 0 && (
+                                          <div className="pt-1 border-t border-yellow-300">
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Common (in both):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {common.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="grid grid-cols-2 gap-2 mt-0.5">
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Source:</div>
+                                          <div className="text-[10px] text-red-700 font-mono break-words">
+                                            {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Destination:</div>
+                                          <div className="text-[10px] text-blue-700 font-mono break-words">
+                                            {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
+                                          </div>
                                         </div>
                                       </div>
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Destination:</div>
-                                        <div className="text-[10px] text-blue-700 font-mono break-words">
-                                          {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
-                                        </div>
-                                      </div>
-                                    </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -1629,23 +1776,81 @@ function UsersDiffView({
                               {diff.differences.map((field, idx) => {
                                 const sourceVal = diff.sourceValue?.[field];
                                 const destVal = diff.destinationValue?.[field];
+                                
+                                // For array fields (scopes, roles), highlight differences
+                                const isArrayField = Array.isArray(sourceVal) || Array.isArray(destVal);
+                                let sourceArray: string[] = [];
+                                let destArray: string[] = [];
+                                let onlyInSource: string[] = [];
+                                let onlyInDest: string[] = [];
+                                let common: string[] = [];
+                                
+                                if (isArrayField) {
+                                  sourceArray = Array.isArray(sourceVal) ? sourceVal : [];
+                                  destArray = Array.isArray(destVal) ? destVal : [];
+                                  onlyInSource = sourceArray.filter(item => !destArray.includes(item));
+                                  onlyInDest = destArray.filter(item => !sourceArray.includes(item));
+                                  common = sourceArray.filter(item => destArray.includes(item));
+                                }
+                                
                                 return (
-                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
-                                    <div className="font-medium text-yellow-800">{field}:</div>
-                                    <div className="grid grid-cols-2 gap-2 mt-0.5">
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Source:</div>
-                                        <div className="text-[10px] text-red-700 font-mono break-words">
-                                          {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                  <div key={idx} className="bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
+                                    <div className="font-medium text-yellow-800 mb-1">{field}:</div>
+                                    {isArrayField && (onlyInSource.length > 0 || onlyInDest.length > 0) ? (
+                                      <div className="mt-1 space-y-1.5">
+                                        {onlyInSource.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Source (will be added):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInSource.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-800 rounded border border-green-300 font-medium">
+                                                  + {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {onlyInDest.length > 0 && (
+                                          <div>
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Only in Destination (will be kept):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {onlyInDest.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded border border-blue-300">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {common.length > 0 && (
+                                          <div className="pt-1 border-t border-yellow-300">
+                                            <div className="text-[9px] text-gray-600 font-semibold mb-0.5">Common (in both):</div>
+                                            <div className="flex flex-wrap gap-1">
+                                              {common.map((item, i) => (
+                                                <span key={i} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded">
+                                                  {item}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="grid grid-cols-2 gap-2 mt-0.5">
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Source:</div>
+                                          <div className="text-[10px] text-red-700 font-mono break-words">
+                                            {Array.isArray(sourceVal) ? sourceVal.join(', ') : String(sourceVal ?? 'N/A')}
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[9px] text-gray-500">Destination:</div>
+                                          <div className="text-[10px] text-blue-700 font-mono break-words">
+                                            {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
+                                          </div>
                                         </div>
                                       </div>
-                                      <div>
-                                        <div className="text-[9px] text-gray-500">Destination:</div>
-                                        <div className="text-[10px] text-blue-700 font-mono break-words">
-                                          {Array.isArray(destVal) ? destVal.join(', ') : String(destVal ?? 'N/A')}
-                                        </div>
-                                      </div>
-                                    </div>
+                                    )}
                                   </div>
                                 );
                               })}

@@ -197,6 +197,11 @@ func compareClientConfigsDetailed(source, dest domain.ClientDetail) ([]string, m
 		sourceVals["optionalClientScopes"] = source.OptionalClientScopes
 		destVals["optionalClientScopes"] = dest.OptionalClientScopes
 	}
+	if !equalStringSlices(source.ClientRoles, dest.ClientRoles) {
+		differences = append(differences, "clientRoles")
+		sourceVals["clientRoles"] = source.ClientRoles
+		destVals["clientRoles"] = dest.ClientRoles
+	}
 	
 	return differences, sourceVals, destVals
 }

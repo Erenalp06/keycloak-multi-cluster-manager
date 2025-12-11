@@ -14,6 +14,7 @@ type ClientDetail struct {
 	ServiceAccountsEnabled bool   `json:"serviceAccountsEnabled"`
 	DefaultClientScopes   []string `json:"defaultClientScopes"`
 	OptionalClientScopes  []string `json:"optionalClientScopes"`
+	ClientRoles           []string `json:"clientRoles"`
 	Enabled               bool     `json:"enabled"`
 }
 

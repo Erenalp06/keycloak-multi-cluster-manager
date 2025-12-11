@@ -658,7 +658,7 @@ func (s *ClusterService) Search(req domain.SearchRequest) (*domain.SearchRespons
 
 // DiscoverRealms discovers all realms in a Keycloak instance using master realm admin credentials
 func (s *ClusterService) DiscoverRealms(req domain.DiscoverRealmsRequest) ([]domain.RealmInfo, error) {
-	return s.keycloakClient.DiscoverRealms(req.BaseURL, req.Username, req.Password)
+	return s.keycloakClient.DiscoverRealms(req.BaseURL, req.Username, req.Password, req.SkipTLSVerify)
 }
 
 // AssignRealmRolesToUser assigns realm roles to a user

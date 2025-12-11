@@ -1,6 +1,6 @@
 # Keycloak Multi-Manage MVP
 
-**Version: 1.0.4.1**
+**Version: 1.0.4.2**
 
 <img width="2554" height="1304" alt="image" src="https://github.com/user-attachments/assets/4ccd1955-00ca-4968-a08d-bb1c05ee4049" />
 
@@ -96,6 +96,32 @@ REACT_APP_API_URL=https://192.168.1.105/api
 4. "Role Diff" sayfasından iki cluster arasındaki farkları karşılaştırın
 
 ## Changelog
+
+### Version 1.0.4.2 (2025-01-XX)
+
+**Yeni Özellikler:**
+- ✅ User Federation (LDAP/AD) provider yönetimi eklendi
+- ✅ LDAP provider oluşturma, düzenleme, silme ve listeleme
+- ✅ Test Connection ve Test Authentication özellikleri
+- ✅ User Sync (full sync) özelliği
+- ✅ Connection URL, Bind DN, Users DN için autocomplete önerileri
+- ✅ Users tablosuna Origin sütunu eklendi (Federation/Local ayrımı)
+- ✅ Discover Realms için Skip TLS Verification seçeneği
+
+**Değişiklikler:**
+- 🔄 searchScope değerleri Keycloak API formatına dönüştürülüyor ("1" = ONE_LEVEL, "2" = SUBTREE)
+- 🔄 Realm UUID kullanımı (parentId için realm name yerine UUID)
+- 🔄 Default değerler güncellendi (usernameLDAPAttribute, rdnLDAPAttribute: "cn", userObjectClasses: "person,organizationalPerson,user")
+- 🔄 Control character temizleme (user input alanları için)
+- 🔄 Retry mekanizması (provider oluşturma sonrası)
+- 🔄 Detaylı request logging (masked credentials ile)
+
+**Düzeltmeler:**
+- 🐛 searchScope UI'da görünmeme sorunu düzeltildi (ONE_LEVEL/SUBTREE -> 1/2 dönüşümü)
+- 🐛 Provider oluşturma sonrası görünmeme sorunu düzeltildi (realm UUID kullanımı)
+- 🐛 Edit Mode mandatory hatası düzeltildi
+- 🐛 Delete ve Sync işlemlerinde token alma sorunu düzeltildi (client credentials kullanımı)
+- 🐛 Control character'ların Keycloak API'yi bozması sorunu düzeltildi
 
 ### Version 1.0.4.1 (2025-01-XX)
 

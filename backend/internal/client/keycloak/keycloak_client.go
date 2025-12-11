@@ -2,6 +2,7 @@ package keycloak
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -378,6 +379,18 @@ func (c *Client) GetClientDetails(baseURL, realm, accessToken string) ([]domain.
 			detail.OptionalClientScopes = optionalScopes
 		}
 		
+		// Get client roles
+		clientRoles, err := c.getClientRoles(baseURL, realm, accessToken, clientID)
+		if err == nil {
+			var roleNames []string
+			for _, role := range clientRoles {
+				if roleName := getString(role, "name"); roleName != "" {
+					roleNames = append(roleNames, roleName)
+				}
+			}
+			detail.ClientRoles = roleNames
+		}
+		
 		clientDetails = append(clientDetails, detail)
 	}
 	
@@ -452,6 +465,187 @@ func (c *Client) CreateClientRole(baseURL, realm, accessToken, clientUUID string
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to create client role: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// UpdateClientScopes updates client scopes (public method)
+// It merges source scope names with existing destination scopes
+func (c *Client) UpdateClientScopes(baseURL, realm, accessToken, clientUUID, scopeType string, sourceScopeNames []string) error {
+	// Get all realm client scopes first
+	realmScopesURL := fmt.Sprintf("%s/admin/realms/%s/client-scopes", baseURL, realm)
+	req, err := http.NewRequest("GET", realmScopesURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to get realm client scopes: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get realm client scopes: status %d", resp.StatusCode)
+	}
+	
+	var realmScopes []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&realmScopes); err != nil {
+		return fmt.Errorf("failed to decode realm client scopes: %w", err)
+	}
+	
+	// Create a map of scope names to IDs
+	scopeMap := make(map[string]string)
+	for _, scope := range realmScopes {
+		if name, ok := scope["name"].(string); ok {
+			if id, ok := scope["id"].(string); ok {
+				scopeMap[name] = id
+			}
+		}
+	}
+	
+	// Get current client scopes in destination (scopes already assigned to the client)
+	currentScopes, err := c.getClientScopes(baseURL, realm, accessToken, clientUUID, scopeType)
+	if err != nil {
+		// If we can't get current scopes, log warning but continue with source scopes
+		fmt.Printf("Warning: failed to get current client scopes, will use source scopes only: %v\n", err)
+		currentScopes = []string{}
+	}
+	
+	// Create a set of current scope names (scopes already assigned to client)
+	currentScopeSet := make(map[string]bool)
+	for _, scopeName := range currentScopes {
+		currentScopeSet[scopeName] = true
+	}
+	
+	// Debug: Log current and source scopes
+	fmt.Printf("Debug: Current %s scopes assigned to destination client: %v\n", scopeType, currentScopes)
+	fmt.Printf("Debug: Source %s scopes to sync: %v\n", scopeType, sourceScopeNames)
+	
+	// Find scopes that are in source but not assigned to destination client
+	var missingScopes []string
+	for _, scopeName := range sourceScopeNames {
+		if !currentScopeSet[scopeName] {
+			// Check if scope exists in realm
+			if _, exists := scopeMap[scopeName]; exists {
+				missingScopes = append(missingScopes, scopeName)
+			} else {
+				fmt.Printf("Warning: scope '%s' from source is not available in destination realm '%s'\n", scopeName, realm)
+			}
+		}
+	}
+	
+	fmt.Printf("Debug: Missing scopes to add to client: %v\n", missingScopes)
+	
+	// If no missing scopes, all source scopes are already assigned
+	if len(missingScopes) == 0 {
+		fmt.Printf("Debug: All source %s scopes are already assigned to destination client\n", scopeType)
+		return nil
+	}
+	
+	// Merge: keep existing scopes and add missing source scopes
+	finalScopeNames := make([]string, 0)
+	
+	// First, add all current scopes (to preserve them)
+	for _, scopeName := range currentScopes {
+		finalScopeNames = append(finalScopeNames, scopeName)
+	}
+	
+	// Then, add missing source scopes
+	for _, scopeName := range missingScopes {
+		finalScopeNames = append(finalScopeNames, scopeName)
+	}
+	
+	// Get scope IDs for all final scope names
+	var scopeIDs []map[string]interface{}
+	var foundScopes []string
+	for _, scopeName := range finalScopeNames {
+		if scopeID, exists := scopeMap[scopeName]; exists {
+			scopeIDs = append(scopeIDs, map[string]interface{}{"id": scopeID})
+			foundScopes = append(foundScopes, scopeName)
+		} else {
+			// Scope not found in realm - log warning but continue
+			fmt.Printf("Warning: client scope '%s' not found in realm '%s', skipping\n", scopeName, realm)
+		}
+	}
+	
+	// If we have missing scopes but couldn't find them in realm, log a warning
+	if len(missingScopes) > 0 {
+		var notFoundScopes []string
+		for _, scopeName := range missingScopes {
+			if _, exists := scopeMap[scopeName]; !exists {
+				notFoundScopes = append(notFoundScopes, scopeName)
+			}
+		}
+		if len(notFoundScopes) > 0 {
+			fmt.Printf("Warning: the following client scopes are not available in realm '%s': %v\n", realm, notFoundScopes)
+		}
+	}
+	
+	// If no scopes to update (all were already present or not found), return early
+	if len(scopeIDs) == 0 {
+		return nil // No scopes to update
+	}
+	
+	// Keycloak API: Add client scopes one by one using PUT
+	// PUT /admin/realms/{realm}/clients/{id}/{default|optional}-client-scopes/{scope-id}
+	var addedScopes []string
+	var failedScopes []string
+	
+	// Debug: Log client UUID and scope info
+	fmt.Printf("Debug: Updating client scopes for client UUID: %s, scopeType: %s, missingScopes: %v\n", clientUUID, scopeType, missingScopes)
+	
+	for _, scopeName := range missingScopes {
+		if scopeID, exists := scopeMap[scopeName]; exists {
+			// Add scope using PUT to add it to the client
+			addURL := fmt.Sprintf("%s/admin/realms/%s/clients/%s/%s-client-scopes/%s", baseURL, realm, clientUUID, scopeType, scopeID)
+			fmt.Printf("Debug: Adding scope %s (ID: %s) to client %s via URL: %s\n", scopeName, scopeID, clientUUID, addURL)
+			
+			addReq, err := http.NewRequest("PUT", addURL, nil)
+			if err != nil {
+				failedScopes = append(failedScopes, scopeName)
+				fmt.Printf("Warning: failed to create request for scope %s: %v\n", scopeName, err)
+				continue
+			}
+			
+			addReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+			addReq.Header.Set("Content-Type", "application/json")
+			
+			addResp, err := c.httpClient.Do(addReq)
+			if err != nil {
+				failedScopes = append(failedScopes, scopeName)
+				fmt.Printf("Warning: failed to add scope %s: %v\n", scopeName, err)
+				continue
+			}
+			
+			// Read response body for debugging
+			body, _ := io.ReadAll(addResp.Body)
+			addResp.Body.Close()
+			
+			if addResp.StatusCode == http.StatusNoContent || addResp.StatusCode == http.StatusOK {
+				addedScopes = append(addedScopes, scopeName)
+				fmt.Printf("Debug: Successfully added scope %s (ID: %s)\n", scopeName, scopeID)
+			} else {
+				failedScopes = append(failedScopes, scopeName)
+				fmt.Printf("Warning: failed to add scope %s (ID: %s): status %d, body: %s, URL: %s\n", scopeName, scopeID, addResp.StatusCode, string(body), addURL)
+			}
+		} else {
+			failedScopes = append(failedScopes, scopeName)
+			fmt.Printf("Warning: scope %s not found in realm scope map\n", scopeName)
+		}
+	}
+	
+	if len(addedScopes) > 0 {
+		fmt.Printf("Successfully added %d client scope(s) to client: %v\n", len(addedScopes), addedScopes)
+	}
+	
+	// Don't fail if some scopes couldn't be added (they might not exist in destination realm)
+	if len(failedScopes) > 0 && len(addedScopes) == 0 {
+		return fmt.Errorf("failed to add %d client scope(s): %v (all scopes failed)", len(failedScopes), failedScopes)
 	}
 	
 	return nil
@@ -647,6 +841,13 @@ func (c *Client) GetUserDetails(baseURL, realm, accessToken string) ([]domain.Us
 	for _, user := range users {
 		userID := getString(user, "id")
 		
+		// Determine user origin: federation or local
+		federationLink := getString(user, "federationLink")
+		origin := "local"
+		if federationLink != "" {
+			origin = "federation"
+		}
+		
 		detail := domain.UserDetail{
 			ID:              userID,
 			Username:        getString(user, "username"),
@@ -656,6 +857,7 @@ func (c *Client) GetUserDetails(baseURL, realm, accessToken string) ([]domain.Us
 			Enabled:         getBool(user, "enabled"),
 			Attributes:      make(map[string][]string),
 			ClientRoles:     make(map[string][]string),
+			Origin:          origin,
 		}
 		
 		// Get attributes
@@ -2074,9 +2276,22 @@ func (c *Client) getUserByUsername(baseURL, realm, accessToken, username string)
 }
 
 // DiscoverRealms discovers all realms in a Keycloak instance using master realm admin credentials
-func (c *Client) DiscoverRealms(baseURL, username, password string) ([]domain.RealmInfo, error) {
+func (c *Client) DiscoverRealms(baseURL, username, password string, skipTLSVerify bool) ([]domain.RealmInfo, error) {
+	// Create HTTP client with optional TLS skip
+	httpClient := c.httpClient
+	if skipTLSVerify {
+		httpClient = &http.Client{
+			Timeout: c.httpClient.Timeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
+	}
+
 	// Get admin token from master realm
-	accessToken, err := c.GetAccessToken(baseURL, "master", username, password)
+	accessToken, err := c.GetAccessTokenWithClient(baseURL, "master", username, password, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get admin token: %w", err)
 	}
@@ -2092,7 +2307,7 @@ func (c *Client) DiscoverRealms(baseURL, username, password string) ([]domain.Re
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 	req.Header.Set("Content-Type", "application/json")
 	
-	resp, err := c.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -2127,6 +2342,39 @@ func (c *Client) DiscoverRealms(baseURL, username, password string) ([]domain.Re
 	}
 	
 	return realmInfos, nil
+}
+
+// GetAccessTokenWithClient gets access token using a custom HTTP client (for TLS skip support)
+func (c *Client) GetAccessTokenWithClient(baseURL, realm, username, password string, httpClient *http.Client) (string, error) {
+	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", baseURL, realm)
+	
+	data := fmt.Sprintf("grant_type=password&client_id=admin-cli&username=%s&password=%s",
+		username, password)
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBufferString(data))
+	if err != nil {
+		return "", err
+	}
+	
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to get token: %s", string(body))
+	}
+	
+	var tokenResp TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", err
+	}
+	
+	return tokenResp.AccessToken, nil
 }
 
 // CreateMultiManageClient creates the multi-manage client in a realm
@@ -2903,5 +3151,258 @@ func (c *Client) countRBACNodes(node domain.RBACNode, stats *domain.RBACStats) {
 	for _, child := range node.Children {
 		c.countRBACNodes(child, stats)
 	}
+}
+
+// GetUserFederationProviders gets all user federation providers for a realm
+func (c *Client) GetUserFederationProviders(baseURL, realm, accessToken string) ([]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/components?type=org.keycloak.storage.UserStorageProvider", baseURL, realm)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get user federation providers: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var providers []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&providers); err != nil {
+		return nil, err
+	}
+	
+	return providers, nil
+}
+
+// GetUserFederationProvider gets a specific user federation provider by ID
+func (c *Client) GetUserFederationProvider(baseURL, realm, accessToken, providerID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/components/%s", baseURL, realm, providerID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get user federation provider: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var provider map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&provider); err != nil {
+		return nil, err
+	}
+	
+	return provider, nil
+}
+
+// CreateUserFederationProvider creates a new user federation provider (LDAP)
+func (c *Client) CreateUserFederationProvider(baseURL, realm, accessToken string, providerConfig map[string]interface{}) (string, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/components", baseURL, realm)
+	
+	// Ensure required fields
+	if providerConfig["providerId"] == nil {
+		providerConfig["providerId"] = "ldap"
+	}
+	if providerConfig["providerType"] == nil {
+		providerConfig["providerType"] = "org.keycloak.storage.UserStorageProvider"
+	}
+	if providerConfig["name"] == nil {
+		providerConfig["name"] = "ldap"
+	}
+	
+	jsonData, err := json.Marshal(providerConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal provider config: %w", err)
+	}
+	
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to create user federation provider: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	// Get the location header to extract the provider ID
+	location := resp.Header.Get("Location")
+	if location != "" {
+		// Extract ID from location header (e.g., /admin/realms/{realm}/components/{id})
+		parts := strings.Split(location, "/")
+		if len(parts) > 0 {
+			providerID := parts[len(parts)-1]
+			// Verify the provider exists by fetching it
+			time.Sleep(200 * time.Millisecond) // Small delay for Keycloak to process
+			return providerID, nil
+		}
+	}
+	
+	// If no location header, try to find the provider by name
+	// Wait a bit for Keycloak to process the creation
+	time.Sleep(500 * time.Millisecond)
+	providers, err := c.GetUserFederationProviders(baseURL, realm, accessToken)
+	if err != nil {
+		return "", fmt.Errorf("failed to get created provider: %w", err)
+	}
+	
+	name, ok := providerConfig["name"].(string)
+	if !ok {
+		return "", fmt.Errorf("provider name not found in config")
+	}
+	
+	for _, p := range providers {
+		if pName, ok := p["name"].(string); ok && pName == name {
+			if id, ok := p["id"].(string); ok {
+				return id, nil
+			}
+		}
+	}
+	
+	return "", fmt.Errorf("provider created but ID not found")
+}
+
+// UpdateUserFederationProvider updates an existing user federation provider
+func (c *Client) UpdateUserFederationProvider(baseURL, realm, accessToken, providerID string, providerConfig map[string]interface{}) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/components/%s", baseURL, realm, providerID)
+	
+	jsonData, err := json.Marshal(providerConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal provider config: %w", err)
+	}
+	
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update user federation provider: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// DeleteUserFederationProvider deletes a user federation provider
+func (c *Client) DeleteUserFederationProvider(baseURL, realm, accessToken, providerID string) error {
+	url := fmt.Sprintf("%s/admin/realms/%s/components/%s", baseURL, realm, providerID)
+	
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete user federation provider: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
+}
+
+// TestUserFederationConnection tests the connection to a user federation provider
+func (c *Client) TestUserFederationConnection(baseURL, realm, accessToken, providerID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/admin/realms/%s/user-storage/%s/test", baseURL, realm, providerID)
+	
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to test connection: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	
+	return result, nil
+}
+
+// SyncUserFederation syncs users from a user federation provider
+func (c *Client) SyncUserFederation(baseURL, realm, accessToken, providerID, action string) error {
+	// action can be: "triggerFullSync", "triggerChangedUsersSync", "triggerLdapKeyCache"
+	url := fmt.Sprintf("%s/admin/realms/%s/user-storage/%s/%s", baseURL, realm, providerID, action)
+	
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+	
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Content-Type", "application/json")
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to sync user federation: status %d, body: %s", resp.StatusCode, string(body))
+	}
+	
+	return nil
 }
 

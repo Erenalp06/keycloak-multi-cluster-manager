@@ -70,6 +70,7 @@ export interface DiscoverRealmsRequest {
   base_url: string;
   username: string;
   password: string;
+  skip_tls_verify?: boolean;
 }
 
 export interface RealmInfo {
@@ -152,6 +153,7 @@ export interface ClientDetail {
   serviceAccountsEnabled: boolean;
   defaultClientScopes: string[];
   optionalClientScopes: string[];
+  clientRoles: string[];
   enabled: boolean;
 }
 
@@ -199,6 +201,7 @@ export interface UserDetail {
   groups: string[];
   attributes: Record<string, string[]>;
   requiredActions: string[];
+  origin?: string; // "federation" or "local" (empty means local)
 }
 
 export interface UserDiff {
@@ -1104,6 +1107,193 @@ export const exportImportApi = {
       const error = await response.json();
       throw new Error(error.error || 'Failed to import clients');
     }
+  },
+};
+
+// User Federation interfaces
+export interface UserFederationProvider {
+  id: string;
+  name: string;
+  provider_id: string;
+  provider_type: string;
+  config: Record<string, string[]>;
+  parent_id: string;
+  enabled: boolean;
+}
+
+export interface CreateUserFederationProviderRequest {
+  name: string;
+  provider_id?: string;
+  enabled?: boolean;
+  config: Record<string, string>;
+}
+
+export interface UpdateUserFederationProviderRequest {
+  name?: string;
+  enabled?: boolean;
+  config?: Record<string, string>;
+}
+
+export interface SyncUserFederationRequest {
+  action: 'triggerFullSync' | 'triggerChangedUsersSync' | 'triggerLdapKeyCache';
+}
+
+export const userFederationApi = {
+  getAll: async (clusterId: number, realm?: string): Promise<UserFederationProvider[]> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation`;
+    const response = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get user federation providers');
+    }
+    return response.json();
+  },
+
+  get: async (clusterId: number, providerId: string, realm?: string): Promise<UserFederationProvider> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation/${providerId}?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation/${providerId}`;
+    const response = await fetch(url, {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get user federation provider');
+    }
+    return response.json();
+  },
+
+  create: async (
+    clusterId: number,
+    data: CreateUserFederationProviderRequest,
+    realm?: string
+  ): Promise<UserFederationProvider> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create user federation provider');
+    }
+    return response.json();
+  },
+
+  update: async (
+    clusterId: number,
+    providerId: string,
+    data: UpdateUserFederationProviderRequest,
+    realm?: string
+  ): Promise<UserFederationProvider> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation/${providerId}?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation/${providerId}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update user federation provider');
+    }
+    return response.json();
+  },
+
+  delete: async (clusterId: number, providerId: string, realm?: string): Promise<void> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation/${providerId}?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation/${providerId}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete user federation provider');
+    }
+  },
+
+  testConnection: async (clusterId: number, providerId: string, realm?: string): Promise<any> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation/${providerId}/test?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation/${providerId}/test`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to test connection');
+    }
+    return response.json();
+  },
+
+  sync: async (
+    clusterId: number,
+    providerId: string,
+    action: SyncUserFederationRequest['action'],
+    realm?: string
+  ): Promise<{ message: string }> => {
+    const url = realm 
+      ? `${API_URL}/clusters/${clusterId}/user-federation/${providerId}/sync?realm=${encodeURIComponent(realm)}`
+      : `${API_URL}/clusters/${clusterId}/user-federation/${providerId}/sync`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ action }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to sync user federation');
+    }
+    return response.json();
+  },
+
+  testLDAPConnection: async (
+    clusterId: number,
+    connectionUrl: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/user-federation/test-connection`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ connection_url: connectionUrl }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to test LDAP connection');
+    }
+    return response.json();
+  },
+
+  testLDAPAuthentication: async (
+    clusterId: number,
+    connectionUrl: string,
+    bindDn: string,
+    bindCredential: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> => {
+    const response = await fetch(`${API_URL}/clusters/${clusterId}/user-federation/test-authentication`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        connection_url: connectionUrl,
+        bind_dn: bindDn,
+        bind_credential: bindCredential,
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to test LDAP authentication');
+    }
+    return response.json();
   },
 };
 

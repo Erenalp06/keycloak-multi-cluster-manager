@@ -32,6 +32,7 @@ type UserDetail struct {
 	Groups          []string               `json:"groups"`
 	Attributes      map[string][]string    `json:"attributes"`
 	RequiredActions []string               `json:"requiredActions"`
+	Origin          string                 `json:"origin,omitempty"` // "federation" or "local" (empty means local)
 }
 
 type UserDiff struct {

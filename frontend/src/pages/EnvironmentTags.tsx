@@ -48,11 +48,13 @@ export default function EnvironmentTags() {
         environmentTagApi.getAll(),
         clusterApi.getAll(),
       ]);
-      setTags(tagsData);
-      setClusters(clustersData);
+      setTags(tagsData || []); // Ensure it's always an array
+      setClusters(clustersData || []); // Ensure it's always an array
       setError(null);
     } catch (error: any) {
       setError(error.message || 'Failed to load data');
+      setTags([]); // Set empty array on error
+      setClusters([]); // Set empty array on error
     } finally {
       setLoading(false);
     }

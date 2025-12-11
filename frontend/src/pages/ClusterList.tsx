@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics, DiscoverRealmsRequest, RealmInfo, environmentTagApi, EnvironmentTag, AssignTagsToClustersRequest } from '@/services/api';
+import { clusterApi, roleApi, Cluster, ClusterHealth, ClusterMetrics, PrometheusMetrics, DiscoverRealmsRequest, RealmInfo, environmentTagApi, EnvironmentTag, AssignTagsToClustersRequest, RemoveTagsFromClustersRequest, CreateEnvironmentTagRequest } from '@/services/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -44,6 +44,12 @@ export default function ClusterList() {
     isBulk: false,
   });
   const [selectedTagsForAssign, setSelectedTagsForAssign] = useState<Set<number>>(new Set());
+  const [createTagDialogOpen, setCreateTagDialogOpen] = useState(false);
+  const [newTag, setNewTag] = useState<CreateEnvironmentTagRequest>({
+    name: '',
+    color: '#3b82f6',
+    description: '',
+  });
   const [detailDialog, setDetailDialog] = useState<{ open: boolean; type: 'clients' | 'users' | 'groups' | 'roles' | null; clusterId: number | null }>({
     open: false,
     type: null,
@@ -107,9 +113,10 @@ export default function ClusterList() {
   const loadTags = async () => {
     try {
       const data = await environmentTagApi.getAll();
-      setTags(data);
+      setTags(data || []); // Ensure it's always an array
     } catch (error) {
       console.error('Failed to load tags:', error);
+      setTags([]); // Set empty array on error
     }
   };
 
@@ -118,28 +125,128 @@ export default function ClusterList() {
       ? Array.from(selectedClusters)
       : (tagAssignDialog.clusterId ? [tagAssignDialog.clusterId] : []);
     
-    if (clusterIds.length === 0 || selectedTagsForAssign.size === 0) {
-      alert(tagAssignDialog.isBulk 
-        ? 'Please select at least one cluster and one tag'
-        : 'Please select at least one tag');
+    if (clusterIds.length === 0) {
+      alert('Please select at least one cluster');
       return;
     }
 
     try {
-      const request: AssignTagsToClustersRequest = {
-        cluster_ids: clusterIds,
-        tag_ids: Array.from(selectedTagsForAssign),
-      };
-      await environmentTagApi.assignTagsToClusters(request);
-      alert(`Tags assigned successfully to ${clusterIds.length} cluster${clusterIds.length > 1 ? 's' : ''}`);
+      // Get current tags for all clusters
+      const currentTagIdsByCluster = new Map<number, Set<number>>();
+      for (const clusterId of clusterIds) {
+        const cluster = clusters.find(c => c.id === clusterId);
+        if (cluster) {
+          currentTagIdsByCluster.set(clusterId, new Set(cluster.environment_tags?.map(t => t.id) || []));
+        }
+      }
+
+      // Determine which tags to assign and which to remove
+      // For bulk operations, we need to track which clusters need which tags
+      const tagsToAssignByCluster = new Map<number, number[]>(); // clusterId -> tagIds[]
+      const tagsToRemoveByCluster = new Map<number, number[]>(); // clusterId -> tagIds[]
+
+      for (const tag of tags) {
+        const shouldHaveTag = selectedTagsForAssign.has(tag.id);
+        
+        if (tagAssignDialog.isBulk) {
+          // For each cluster, check if tag should be added or removed
+          for (const clusterId of clusterIds) {
+            const currentTags = currentTagIdsByCluster.get(clusterId) || new Set();
+            const currentlyHasTag = currentTags.has(tag.id);
+
+            if (shouldHaveTag && !currentlyHasTag) {
+              // Need to assign this tag to this cluster
+              if (!tagsToAssignByCluster.has(clusterId)) {
+                tagsToAssignByCluster.set(clusterId, []);
+              }
+              tagsToAssignByCluster.get(clusterId)!.push(tag.id);
+            } else if (!shouldHaveTag && currentlyHasTag) {
+              // Need to remove this tag from this cluster
+              if (!tagsToRemoveByCluster.has(clusterId)) {
+                tagsToRemoveByCluster.set(clusterId, []);
+              }
+              tagsToRemoveByCluster.get(clusterId)!.push(tag.id);
+            }
+          }
+        } else {
+          // Single cluster operation
+          const clusterId = tagAssignDialog.clusterId!;
+          const currentTags = currentTagIdsByCluster.get(clusterId) || new Set();
+          const currentlyHasTag = currentTags.has(tag.id);
+
+          if (shouldHaveTag && !currentlyHasTag) {
+            if (!tagsToAssignByCluster.has(clusterId)) {
+              tagsToAssignByCluster.set(clusterId, []);
+            }
+            tagsToAssignByCluster.get(clusterId)!.push(tag.id);
+          } else if (!shouldHaveTag && currentlyHasTag) {
+            if (!tagsToRemoveByCluster.has(clusterId)) {
+              tagsToRemoveByCluster.set(clusterId, []);
+            }
+            tagsToRemoveByCluster.get(clusterId)!.push(tag.id);
+          }
+        }
+      }
+
+      // Group clusters by their tag sets for efficient API calls
+      // For assign operations: group clusters that need the same tags
+      const assignGroups = new Map<string, { clusterIds: number[], tagIds: number[] }>();
+      tagsToAssignByCluster.forEach((tagIds, clusterId) => {
+        const key = tagIds.sort().join(',');
+        if (!assignGroups.has(key)) {
+          assignGroups.set(key, { clusterIds: [], tagIds });
+        }
+        assignGroups.get(key)!.clusterIds.push(clusterId);
+      });
+
+      // For remove operations: group clusters that need to remove the same tags
+      const removeGroups = new Map<string, { clusterIds: number[], tagIds: number[] }>();
+      tagsToRemoveByCluster.forEach((tagIds, clusterId) => {
+        const key = tagIds.sort().join(',');
+        if (!removeGroups.has(key)) {
+          removeGroups.set(key, { clusterIds: [], tagIds });
+        }
+        removeGroups.get(key)!.clusterIds.push(clusterId);
+      });
+
+      // Perform assign and remove operations
+      const promises: Promise<any>[] = [];
+      
+      assignGroups.forEach((group) => {
+        promises.push(environmentTagApi.assignTagsToClusters({
+          cluster_ids: group.clusterIds,
+          tag_ids: group.tagIds,
+        }));
+      });
+      
+      removeGroups.forEach((group) => {
+        promises.push(environmentTagApi.removeTagsFromClusters({
+          cluster_ids: group.clusterIds,
+          tag_ids: group.tagIds,
+        }));
+      });
+
+      if (promises.length > 0) {
+        await Promise.all(promises);
+        const totalAssignCount = Array.from(tagsToAssignByCluster.values()).reduce((sum, tags) => sum + tags.length, 0);
+        const totalRemoveCount = Array.from(tagsToRemoveByCluster.values()).reduce((sum, tags) => sum + tags.length, 0);
+        const actions = [];
+        if (totalAssignCount > 0) actions.push(`assigned ${totalAssignCount} tag${totalAssignCount > 1 ? 's' : ''}`);
+        if (totalRemoveCount > 0) actions.push(`removed ${totalRemoveCount} tag${totalRemoveCount > 1 ? 's' : ''}`);
+        alert(`Successfully ${actions.join(' and ')} for ${clusterIds.length} cluster${clusterIds.length > 1 ? 's' : ''}`);
+      } else {
+        alert('No changes to apply');
+      }
+
       setTagAssignDialog({ open: false, clusterId: null, isBulk: false });
       setSelectedTagsForAssign(new Set());
       if (tagAssignDialog.isBulk) {
         setSelectedClusters(new Set());
       }
       loadClusters();
+      loadTags(); // Reload tags in case a new one was created
     } catch (error: any) {
-      alert(error.message || 'Failed to assign tags');
+      alert(error.message || 'Failed to update tags');
     }
   };
 
@@ -148,8 +255,47 @@ export default function ClusterList() {
       alert('Please select at least one cluster');
       return;
     }
+    // For bulk, check which tags are common to ALL selected clusters
+    const commonTagIds = new Set<number>();
+    const firstCluster = clusters.find(c => selectedClusters.has(c.id));
+    if (firstCluster) {
+      const firstClusterTagIds = new Set(firstCluster.environment_tags?.map(t => t.id) || []);
+      // Start with first cluster's tags
+      firstClusterTagIds.forEach(tagId => commonTagIds.add(tagId));
+      
+      // Keep only tags that exist in ALL selected clusters
+      Array.from(selectedClusters).forEach(clusterId => {
+        const cluster = clusters.find(c => c.id === clusterId);
+        if (cluster) {
+          const clusterTagIds = new Set(cluster.environment_tags?.map(t => t.id) || []);
+          // Remove tags that don't exist in this cluster
+          Array.from(commonTagIds).forEach(tagId => {
+            if (!clusterTagIds.has(tagId)) {
+              commonTagIds.delete(tagId);
+            }
+          });
+        }
+      });
+    }
     setTagAssignDialog({ open: true, clusterId: null, isBulk: true });
-    setSelectedTagsForAssign(new Set());
+    setSelectedTagsForAssign(commonTagIds);
+  };
+
+  const handleCreateTag = async () => {
+    if (!newTag.name.trim()) {
+      alert('Tag name is required');
+      return;
+    }
+
+    try {
+      await environmentTagApi.create(newTag);
+      setCreateTagDialogOpen(false);
+      setNewTag({ name: '', color: '#3b82f6', description: '' });
+      await loadTags();
+      alert('Tag created successfully');
+    } catch (error: any) {
+      alert(error.message || 'Failed to create tag');
+    }
   };
 
   // Auto-expand all groups when clusters are loaded
@@ -846,7 +992,7 @@ export default function ClusterList() {
             </Button>
           </div>
 
-          {/* Bulk Tag Assign */}
+          {/* Bulk Tag Assign/Remove */}
           {isAdmin && selectedClusters.size > 0 && (
             <Button
               variant="outline"
@@ -855,7 +1001,7 @@ export default function ClusterList() {
               className="h-8 text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200"
             >
               <Tag className="h-3.5 w-3.5 mr-1.5" />
-              Assign Tags ({selectedClusters.size})
+              Manage Tags ({selectedClusters.size})
             </Button>
           )}
 
@@ -1135,7 +1281,7 @@ export default function ClusterList() {
                         ))}
                       </div>
                       {selectedRealms.size > 0 && (
-                        <div className="mt-4 pt-4 border-t">
+                        <div className="mt-4 pt-4 border-t space-y-2">
                           <Button
                             onClick={handleAddSelectedRealms}
                             className="w-full bg-green-600 hover:bg-green-700 text-white text-sm h-9"
@@ -2110,13 +2256,13 @@ export default function ClusterList() {
             <DialogHeader>
               <DialogTitle>
                 {tagAssignDialog.isBulk 
-                  ? `Assign Tags to ${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''}`
-                  : 'Assign Tags to Cluster'}
+                  ? `Manage Tags for ${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''}`
+                  : 'Manage Tags for Cluster'}
               </DialogTitle>
               <DialogDescription>
                 {tagAssignDialog.isBulk
-                  ? `Select tags to assign to ${selectedClusters.size} selected cluster${selectedClusters.size > 1 ? 's' : ''}`
-                  : 'Select tags to assign to this cluster'}
+                  ? `Check tags to assign, uncheck to remove. Changes will be applied to ${selectedClusters.size} selected cluster${selectedClusters.size > 1 ? 's' : ''}.`
+                  : 'Check tags to assign, uncheck to remove. Changes will be applied to this cluster.'}
               </DialogDescription>
             </DialogHeader>
             {tagAssignDialog.isBulk && (
@@ -2136,27 +2282,43 @@ export default function ClusterList() {
             )}
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label>Select Tags</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Select Tags</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCreateTagDialogOpen(true)}
+                    className="text-xs h-7"
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Create Tag
+                  </Button>
+                </div>
                 <div className="border rounded-lg p-3 max-h-64 overflow-y-auto space-y-2">
-                  {tags.map((tag) => {
-                    let hasTag = false;
+                  {tags.length === 0 ? (
+                    <div className="text-center py-4 text-sm text-gray-500">
+                      No tags available. <button onClick={() => setCreateTagDialogOpen(true)} className="text-blue-600 hover:underline">Create one</button>
+                    </div>
+                  ) : (
+                    tags.map((tag) => {
+                    // Check current state - for bulk, show if ALL clusters have it
+                    let currentlyHasTag = false;
                     if (tagAssignDialog.isBulk) {
-                      // For bulk, check if ALL selected clusters have this tag
                       const clustersWithTag = Array.from(selectedClusters).filter(clusterId => {
                         const cluster = clusters.find(c => c.id === clusterId);
                         return cluster?.environment_tags?.some(t => t.id === tag.id);
                       });
-                      hasTag = clustersWithTag.length === selectedClusters.size;
+                      currentlyHasTag = clustersWithTag.length === selectedClusters.size;
                     } else {
                       const cluster = clusters.find(c => c.id === tagAssignDialog.clusterId);
-                      hasTag = cluster?.environment_tags?.some(t => t.id === tag.id) || false;
+                      currentlyHasTag = cluster?.environment_tags?.some(t => t.id === tag.id) || false;
                     }
+                    
                     return (
                       <label key={tag.id} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
                         <input
                           type="checkbox"
-                          checked={selectedTagsForAssign.has(tag.id) || hasTag}
-                          disabled={hasTag}
+                          checked={selectedTagsForAssign.has(tag.id)}
                           onChange={(e) => {
                             const newSet = new Set(selectedTagsForAssign);
                             if (e.target.checked) {
@@ -2173,14 +2335,19 @@ export default function ClusterList() {
                           style={{ backgroundColor: tag.color }}
                         />
                         <span className="text-sm flex-1">{tag.name}</span>
-                        {hasTag && (
-                          <span className="text-xs text-gray-500">
-                            {tagAssignDialog.isBulk ? '(all have this tag)' : '(already assigned)'}
+                        {currentlyHasTag && !selectedTagsForAssign.has(tag.id) && (
+                          <span className="text-xs text-orange-600 font-medium">
+                            (will be removed)
+                          </span>
+                        )}
+                        {!currentlyHasTag && selectedTagsForAssign.has(tag.id) && (
+                          <span className="text-xs text-green-600 font-medium">
+                            (will be added)
                           </span>
                         )}
                       </label>
                     );
-                  })}
+                  }))}
                 </div>
               </div>
             </div>
@@ -2194,13 +2361,72 @@ export default function ClusterList() {
               }}>
                 Cancel
               </Button>
-              <Button onClick={handleAssignTagsToCluster} disabled={selectedTagsForAssign.size === 0}>
-                Assign Tags {tagAssignDialog.isBulk ? `to ${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''}` : ''}
+              <Button onClick={handleAssignTagsToCluster}>
+                Save Changes {tagAssignDialog.isBulk ? `(${selectedClusters.size} Cluster${selectedClusters.size > 1 ? 's' : ''})` : ''}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Create Tag Dialog */}
+      <Dialog open={createTagDialogOpen} onOpenChange={setCreateTagDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Environment Tag</DialogTitle>
+            <DialogDescription>Create a new tag to categorize clusters</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="tag-name">Name *</Label>
+              <Input
+                id="tag-name"
+                value={newTag.name}
+                onChange={(e) => setNewTag({ ...newTag, name: e.target.value })}
+                placeholder="e.g., Production, Development"
+              />
+            </div>
+            <div>
+              <Label htmlFor="tag-color">Color</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="tag-color"
+                  type="color"
+                  value={newTag.color}
+                  onChange={(e) => setNewTag({ ...newTag, color: e.target.value })}
+                  className="w-20 h-10"
+                />
+                <Input
+                  value={newTag.color}
+                  onChange={(e) => setNewTag({ ...newTag, color: e.target.value })}
+                  placeholder="#3b82f6"
+                  className="flex-1"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="tag-description">Description</Label>
+              <Input
+                id="tag-description"
+                value={newTag.description || ''}
+                onChange={(e) => setNewTag({ ...newTag, description: e.target.value })}
+                placeholder="Optional description"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setCreateTagDialogOpen(false);
+              setNewTag({ name: '', color: '#3b82f6', description: '' });
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateTag}>
+              Create Tag
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

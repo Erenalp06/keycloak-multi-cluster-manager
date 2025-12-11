@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"keycloak-multi-manage/internal/domain"
 	"time"
+	
+	"github.com/lib/pq"
 )
 
 type EnvironmentTagRepository struct {
@@ -199,12 +201,15 @@ func (r *EnvironmentTagRepository) AssignTagsToClusters(clusterIDs []int, tagIDs
 }
 
 func (r *EnvironmentTagRepository) RemoveTagsFromClusters(clusterIDs []int, tagIDs []int) error {
+	// Use IN clause with proper parameter handling
+	// Build query with proper placeholders
 	query := `
 		DELETE FROM cluster_environment_tags
-		WHERE cluster_id = ANY($1) AND tag_id = ANY($2)
+		WHERE cluster_id = ANY($1::int[]) AND tag_id = ANY($2::int[])
 	`
 	
-	_, err := r.db.Exec(query, clusterIDs, tagIDs)
+	// Convert slices to pq.Array for PostgreSQL array support
+	_, err := r.db.Exec(query, pq.Array(clusterIDs), pq.Array(tagIDs))
 	return err
 }
 

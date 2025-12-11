@@ -206,6 +206,32 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
     try {
       const data = await clusterApi.getClients(cluster.id);
       setClients(data || []);
+      
+      // Load roles for all clients in parallel
+      if (data && data.length > 0) {
+        const rolePromises = data.map(async (client) => {
+          const clientId = client.clientId || client.id || '';
+          if (clientId && !clientRoles[clientId]) {
+            try {
+              const roles = await clusterApi.getClientRoles(cluster.id, clientId);
+              return { clientId, roles };
+            } catch (err) {
+              console.error(`Failed to load roles for client ${clientId}:`, err);
+              return { clientId, roles: [] };
+            }
+          }
+          return null;
+        });
+        
+        const roleResults = await Promise.all(rolePromises);
+        const newClientRoles: Record<string, any[]> = { ...clientRoles };
+        roleResults.forEach((result) => {
+          if (result) {
+            newClientRoles[result.clientId] = result.roles;
+          }
+        });
+        setClientRoles(newClientRoles);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load clients');
       setClients([]);
@@ -609,7 +635,7 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
         <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="realm" className="flex items-center gap-2">
             <Shield className="h-4 w-4" />
-            Realm
+            Clients
           </TabsTrigger>
           <TabsTrigger value="users" className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -635,8 +661,8 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle className="text-base">Realm Information</CardTitle>
-                  <CardDescription>Keycloak realm details and clients</CardDescription>
+                  <CardTitle className="text-base">Clients</CardTitle>
+                  <CardDescription>Keycloak clients in {cluster.realm || 'master'} realm</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -769,6 +795,7 @@ export default function ClusterManagementPanel({ cluster }: ClusterManagementPan
                   loading={loadingClients}
                   searchTerm={clientSearchTerm}
                   onSearchChange={setClientSearchTerm}
+                  clientRoles={clientRoles}
                   onClientClick={async (client) => {
                     setSelectedClientForDetail(client);
                     const clientId = client.clientId || client.id || '';

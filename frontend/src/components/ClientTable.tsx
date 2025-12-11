@@ -14,6 +14,7 @@ interface ClientTableProps {
   onAssignRoleClick: (client: ClientDetail) => void;
   clusterBaseUrl: string;
   realm: string;
+  clientRoles?: Record<string, any[]>; // clientId -> roles[]
 }
 
 export default function ClientTable({
@@ -25,6 +26,7 @@ export default function ClientTable({
   onAssignRoleClick,
   clusterBaseUrl,
   realm,
+  clientRoles = {},
 }: ClientTableProps) {
   const filteredClients = clients.filter(client =>
     client.clientId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -66,6 +68,7 @@ export default function ClientTable({
               <TableHead className="text-xs">Client ID</TableHead>
               <TableHead className="text-xs">Name</TableHead>
               <TableHead className="text-xs">Protocol</TableHead>
+              <TableHead className="text-xs">Roles</TableHead>
               <TableHead className="text-xs">Status</TableHead>
               <TableHead className="text-xs w-[100px]"></TableHead>
             </TableRow>
@@ -80,6 +83,18 @@ export default function ClientTable({
                 <TableCell className="text-xs font-medium">{client.clientId || '-'}</TableCell>
                 <TableCell className="text-xs">{client.name && client.name !== client.clientId ? client.name : '-'}</TableCell>
                 <TableCell className="text-xs">{client.protocol || '-'}</TableCell>
+                <TableCell className="text-xs">
+                  {(() => {
+                    const roles = clientRoles[client.clientId || client.id] || [];
+                    return roles.length > 0 ? (
+                      <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 font-medium">
+                        {roles.length} role{roles.length > 1 ? 's' : ''}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    );
+                  })()}
+                </TableCell>
                 <TableCell className="text-xs">
                   <span className={`px-2 py-0.5 rounded text-xs ${
                     client.enabled
